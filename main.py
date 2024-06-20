@@ -3,7 +3,16 @@ from dotenv import load_dotenv
 import os
 
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Label, Button, Header
+from textual.widgets import (
+    Input,
+    Label,
+    Button,
+    Header,
+    Select,
+    SelectionList,
+    ListView,
+    ListItem,
+)
 from textual.containers import Vertical
 
 
@@ -33,15 +42,53 @@ class BidRunner:
         self._s3_session.create()
 
 
+# App ---------------------------------------------------
+
+
+class MultiSelectList(ListView):
+    def __init__(self, options):
+        super().__init__()
+        self.options = options
+        self.selected = set()
+        self.build_options()
+
+    def build_options(self):
+        for option in self.options:
+            self.append(ListItem(option))
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item = event.node
+        if item in self.selected:
+            self.selected.remove(item)
+            item.remove_class("selected")
+        else:
+            self.selected.add(item)
+            item.add_class("selected")
+
+
 class BidRunnerApp(App):
+    CSS_PATH = "styles.tcss"
+
     def on_mount(self) -> None:
         self.title = "Bidrunner 2"
         load_dotenv()
 
     def compose(self) -> ComposeResult:
+        BID_MONTHS = ["January", "February", "March", "April", "May", "June"]
+        select_bid_months = ((line, line) for line in BID_MONTHS)
         yield Header()
         yield Input(placeholder="enter bid id", id="bid-id")
-        yield Input(placeholder="enter months", id="bid-months")
+        yield SelectionList[int](
+            ("Falken's Maze", 0, True),
+            ("Black Jack", 1),
+            ("Gin Rummy", 2),
+            ("Hearts", 3),
+            ("Bridge", 4),
+            ("Checkers", 5),
+            ("Chess", 6, True),
+            ("Poker", 7),
+            ("Fighter Combat", 8, True),
+        )
         yield Input(placeholder="enter bid split id", id="bid-split-id")
         yield Button("Submit", id="submit-run", variant="default")
 

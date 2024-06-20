@@ -1,0 +1,18 @@
+#bid-id {
+    width: 15%;
+    margin: 1;
+}
+
+
+#bid-months {
+    width: 15%;
+    margin: 1;
+}
+
+
+#bid-split-id {
+    width: 15%;
+    margin: 1;
+}
+
+
