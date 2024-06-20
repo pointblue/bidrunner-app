@@ -2,15 +2,13 @@ import boto3
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
-
-
-s3_input_bucket = ""
-s3_output_bucket = ""
+from textual.app import App, ComposeResult
+from textual.widgets import Input, Label, Button, Header
+from textual.containers import Vertical
 
 
 class BidRunner:
-    def __init__(self, s3_input, s3_output):
+    def __init__(self, s3_input, s3_output, template):
         self.s3_input = s3_input
         self.s3_output = s3_output
 
@@ -26,10 +24,28 @@ class BidRunner:
             aws_session_token=aws_session_token,
         )
         self._s3_session = self._session.resource("s3")
-        self._ec2_session = self._session.resource("ec2")
+        self._ec2_client = self._session.client("ec2")
 
     def ec2_create(self):
-        self._ec2_session.create()
+        self._ec2_client.launch_instances()
 
     def s3_verify(self):
         self._s3_session.create()
+
+
+class BidRunnerApp(App):
+    def on_mount(self) -> None:
+        self.title = "Bidrunner 2"
+        load_dotenv()
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Input(placeholder="enter bid id", id="bid-id")
+        yield Input(placeholder="enter months", id="bid-months")
+        yield Input(placeholder="enter bid split id", id="bid-split-id")
+        yield Button("Submit", id="submit-run", variant="default")
+
+
+if __name__ == "__main__":
+    app = BidRunnerApp()
+    app.run()
