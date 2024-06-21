@@ -4,6 +4,8 @@ import boto3
 from dotenv import load_dotenv
 import os
 import time
+import asyncio
+import threading
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -18,7 +20,6 @@ class BidRunner:
         self.s3_input = s3_input
         self.aws_is_connected = False
         self.logger = logger
-        self.logger.write_line("Welcome to Bidrunner2!")
 
     def aws_connect(self, access_key, secret_key, session_token):
         try:
@@ -71,17 +72,29 @@ class BidRunner:
     def pollQ(self):
         sqs = self.aws_session.client("sqs")
         queue_url = "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
+
         while True:
-            response = sqs.receive_message(
-                QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=20
-            )
-            messages = response.get("Messages", [])
-            for message in messages:
-                self.logger.write_line(message)
-                sqs.delete_message(
-                    QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
+            try:
+                response = sqs.receive_message(
+                    QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=20
                 )
-            time.sleep(1)
+
+                messages = response.get("Messages", [])
+
+                if messages:
+                    for message in messages:
+                        body = message.get("Body", "")
+                        self.logger.write_line(body)
+                        receipt_handle = message["ReceiptHandle"]
+
+                        sqs.delete_message(
+                            QueueUrl=queue_url, ReceiptHandle=receipt_handle
+                        )
+                else:
+                    self.logger.write_line("No messages received.")
+
+            except Exception as e:
+                self.logger.write_line(f"Error receiving messages: {str(e)}")
 
     def __repr__(self):
         return f"<BidRunner Input: {'aws connected' if self.aws_is_connected else 'aws NOT connected'}>"
@@ -96,6 +109,8 @@ class BidRunnerApp(App):
     def on_mount(self) -> None:
         load_dotenv()
         self.title = "Bidrunner2"
+        log = self.query_one(Log)
+        log.write_line("Welcome to Bidrunner2!")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -174,7 +189,9 @@ class BidRunnerApp(App):
         if event.button.id == "submit_run":
             log.write_line(f"Bid Submitted: {runner}")
             runner.run()
-            runner.pollQ()
+            poll_thread = threading.Thread(target=runner.pollQ)
+            poll_thread.daemon = True
+            poll_thread.start()
 
 
 if __name__ == "__main__":
