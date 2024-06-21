@@ -25,6 +25,7 @@
 #bid-name {margin-bottom: 1;}
 #bid-input-bucket {margin-bottom: 1;}
 #bid-auction-id {margin-bottom: 1;}
+#submit-aws-connection-check {margin-left: 1;}
 
 .input-focus:focus {
     background: #273257 20%;
