@@ -1,18 +1,31 @@
 #bid-id {
-    width: 15%;
-    margin: 1;
+    margin-bottom: 1;
 }
 
 
 #bid-months {
-    width: 15%;
-    margin: 1;
+   margin-bottom: 1;
 }
 
 
 #bid-split-id {
-    width: 15%;
-    margin: 1;
+   margin-bottom: 1;
 }
 
+#main-ui {
+    margin: 2;
+    width: 40%
+}
 
+#log_ui {margin: 2; width: 60%}
+
+#submit_run {
+}
+
+#bid-name {margin-bottom: 1;}
+#bid-input-bucket {margin-bottom: 1;}
+#bid-auction-id {margin-bottom: 1;}
+
+.input-focus:focus {
+    background: #273257 20%;
+}
