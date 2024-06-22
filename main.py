@@ -12,11 +12,13 @@ from textual.validation import Length
 
 
 class BidRunner:
-    def __init__(self, aws_credentials, logger: Log):
+    def __init__(self):
         self.aws_credentials_set = False
-        self.logger = logger
         self.aws_creds = {}
-        self.runner_details = {"cluster": None, "tasks": []}
+        self.runner_details = {}
+
+    def set_logger(self, log: Log):
+        self.logger = log
 
     def aws_set_credentials(self, access_key, secret_key, session_token):
         self.aws_creds = {}
@@ -80,6 +82,10 @@ class BidRunner:
             self.logger.write_line(f"{e}")
 
     def check_task_status(self):
+        if len(self.runner_details) == 0:
+            self.logger.write_line(
+                f"runner details is empty, did you run the a bid first? Value of runner_details: {self.runner_details}"
+            )
         if not self.runner_details.get("tasks") or not self.runner_details.get(
             "cluster"
         ):
@@ -122,6 +128,12 @@ class BidRunnerApp(App):
         self.title = "Bidrunner2"
         log = self.query_one(Log)
         log.write_line("Welcome to Bidrunner2!")
+        self.runner = BidRunner()
+        self.runner.aws_set_credentials(
+            os.getenv("AWS_ACCESS_KEY_ID"),
+            os.getenv("AWS_SECRET_ACCESS_KEY"),
+            os.getenv("AWS_SESSION_TOKEN"),
+        )
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -192,25 +204,19 @@ class BidRunnerApp(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(Log)
+        self.runner.set_logger(log)
         bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
-        runner = BidRunner(bid_input_bucket, log)
-        runner.aws_set_credentials(
-            os.getenv("AWS_ACCESS_KEY_ID"),
-            os.getenv("AWS_SECRET_ACCESS_KEY"),
-            os.getenv("AWS_SESSION_TOKEN"),
-        )
         if event.button.id == "submit-aws-connection-check":
-            creds_ok = runner.aws_check_credentials()
+            creds_ok = self.runner.aws_check_credentials()
             log.write_line(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
-            log.write_line(f"Bid Submitted: {runner}")
-            runner.run()
+            self.runner.run()
             # queue_url = (
             #     "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
             # )
-            log.write_line(f"CLUSTER: {runner.runner_details.get('cluster_name')}")
+            log.write_line(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
         if event.button.id == "check-task-status":
-            runner.check_task_status()
+            self.runner.check_task_status()
 
 
 # class A:
