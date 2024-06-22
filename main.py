@@ -5,7 +5,16 @@ from rich.text import Text
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Button, Header, RichLog, SelectionList, Log, Label
+from textual.widgets import (
+    Input,
+    Button,
+    Header,
+    RichLog,
+    SelectionList,
+    Log,
+    Label,
+    Tabs,
+)
 from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.validation import Length
@@ -30,7 +39,6 @@ class BidRunner:
 
     def aws_check_credentials(self):
         try:
-            self.logger.write("trying to connect to aws")
             s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
             _ = s3.list_buckets()
             return True
@@ -105,7 +113,7 @@ class BidRunner:
     def check_sqs_Q(self, queue_url):
         sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
         resp = sqs_client.receive_message(
-            QueueUrl=queue_url, MaxNumberOfMessages=1, WaitTimeSeconds=20
+            QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=5
         )
         messages = resp.get("Messages", [])
         for message in messages:
@@ -118,12 +126,18 @@ class BidRunner:
         self.check_task_status()
         self.check_sqs_Q(q_url)
 
-        self.logger.write(
-            f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
-        )
-        self.logger.write(
-            f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
-        )
+        if len(self.task_status) > 0:
+            self.logger.write(
+                f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
+            )
+        else:
+            self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
+        if len(self.sqs_status) > 0:
+            self.logger.write(
+                f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
+            )
+        else:
+            self.logger.write("[bold blue]Bid - no new messages[/bold blue]")
 
     def __repr__(self):
         return "<BidRunner Input>"
@@ -138,16 +152,20 @@ class BidRunnerApp(App):
     def on_mount(self) -> None:
         load_dotenv()
         self.title = "Bidrunner2"
-        log = self.query_one(RichLog)
-        log.write("Welcome to Bidrunner2!")
+        # log = self.query_one(RichLog)
+        # log.write("Welcome to Bidrunner2!")
         self.runner = BidRunner()
         self.runner.aws_set_credentials(
             os.getenv("AWS_ACCESS_KEY_ID"),
             os.getenv("AWS_SECRET_ACCESS_KEY"),
             os.getenv("AWS_SESSION_TOKEN"),
         )
+        self.notify("Welcome to bidrunner2!")
+        self.notify("Enter bid details and click submit to spawn model run")
 
     def compose(self) -> ComposeResult:
+        rl = RichLog(auto_scroll=True, highlight=True, markup=True, id="bid-run-logs")
+        rl.border_title = "Run Logs"
         yield Header()
         yield Horizontal(
             Container(
@@ -212,7 +230,8 @@ class BidRunnerApp(App):
                 id="main-ui",
             ),
             Container(
-                RichLog(auto_scroll=True, highlight=True, markup=True), id="log_ui"
+                rl,
+                id="log_ui",
             ),
         )
 
@@ -221,7 +240,13 @@ class BidRunnerApp(App):
         self.runner.set_logger(log)
         if event.button.id == "submit-aws-connection-check":
             creds_ok = self.runner.aws_check_credentials()
-            log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
+            notify_severity = "information" if creds_ok else "error"
+            self.notify(
+                f"{'Your credentials look good!' if creds_ok else 'Ooop! Your credentials are not valid, check logs for details'}",
+                title="AWS Credential Check",
+                severity=notify_severity,
+            )
+            # log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
             self.runner.run()
             log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")

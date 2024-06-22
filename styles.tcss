@@ -30,3 +30,8 @@
 .input-focus:focus {
     background: #273257 20%;
 }
+
+#bid-run-logs {
+    border: solid $secondary;
+    border-title-align: left;
+}
