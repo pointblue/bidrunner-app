@@ -1,11 +1,7 @@
-from logging import raiseExceptions
-from sys import exception
 import boto3
 from dotenv import load_dotenv
 import os
-import time
-import asyncio
-import threading
+from aiobotocore.session import get_session
 
 from textual import on
 from textual.app import App, ComposeResult
@@ -16,88 +12,103 @@ from textual.validation import Length
 
 
 class BidRunner:
-    def __init__(self, s3_input, logger: Log):
-        self.s3_input = s3_input
-        self.aws_is_connected = False
+    def __init__(self, aws_credentials, logger: Log):
+        self.aws_credentials_set = False
         self.logger = logger
+        self.aws_creds = {}
+        self.runner_details = {"cluster": None, "tasks": []}
 
-    def aws_connect(self, access_key, secret_key, session_token):
+    def aws_set_credentials(self, access_key, secret_key, session_token):
+        self.aws_creds = {}
+        self.aws_creds["aws_access_key_id"] = access_key
+        self.aws_creds["aws_secret_access_key"] = secret_key
+        self.aws_creds["aws_session_token"] = session_token
+
+    def aws_check_credentials(self):
         try:
             self.logger.write_line("trying to connect to aws")
-            self.aws_session = boto3.Session(
-                aws_access_key_id=access_key,
-                aws_secret_access_key=secret_key,
-                aws_session_token=session_token,
-                region_name="us-west-2",
-            )
-            s3_client = self.aws_session.client("s3")
-            buckets = s3_client.list_buckets()
-            self.aws_is_connected = True
-            self.logger.write_line("connected!")
+            s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
+            _ = s3.list_buckets()
+            return True
         except Exception as e:
             self.logger.write_line(
                 "unable to connect to aws, with the following error:"
             )
             self.logger.write_line(f"{e}")
+            return False
 
     def run(self):
-        self.logger.write_line("running bid on cluster")
-        cluster_name = "WaterTrackerDevCluster"
-        task_definition_family = "water-tracker-model-runs"
-        task_definition_revision = "7"
-        task_definition = f"{task_definition_family}:{task_definition_revision}"
+        try:
+            cluster_name = "WaterTrackerDevCluster"
+            task_definition_family = "water-tracker-model-runs"
+            task_definition_revision = "8"
+            task_definition = f"{task_definition_family}:{task_definition_revision}"
+            self.logger.write_line(f"running bid on cluster: {cluster_name}")
 
-        if not self.aws_is_connected:
-            raise Exception("aws needs to be connected")
+            ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            resp = ecs_client.run_task(
+                cluster=cluster_name,
+                taskDefinition=task_definition,
+                count=1,
+                launchType="FARGATE",
+                networkConfiguration={
+                    "awsvpcConfiguration": {
+                        "subnets": [
+                            "subnet-00dbf1bd023906da2",
+                            "subnet-0f8ae878792f9ba53",
+                            "subnet-0be2ea73766e5a51a",
+                            "subnet-03d9c808462943df1",
+                        ],  # Replace with your subnet ID
+                        "assignPublicIp": "ENABLED",
+                    }
+                },
+            )
 
-        cl = self.aws_session.client("ecs")
-        resp = cl.run_task(
-            cluster=cluster_name,
-            taskDefinition=task_definition,
-            count=1,
-            launchType="FARGATE",
-            networkConfiguration={
-                "awsvpcConfiguration": {
-                    "subnets": [
-                        "subnet-00dbf1bd023906da2",
-                        "subnet-0f8ae878792f9ba53",
-                        "subnet-0be2ea73766e5a51a",
-                        "subnet-03d9c808462943df1",
-                    ],  # Replace with your subnet ID
-                    "assignPublicIp": "ENABLED",
-                }
-            },
+            task_arn = resp["tasks"][0]["taskArn"]
+            last_status = resp["tasks"][0]["lastStatus"]
+            self.runner_details["cluster"] = cluster_name
+            self.runner_details["tasks"] = [task_arn]
+
+            self.logger.write_line(
+                f"Task - running on cluster: {self.runner_details['cluster']}"
+            )
+            self.logger.write_line(f"the value of the dict\n{self.runner_details}")
+            self.logger.write_line(f"Task - Arn: {self.runner_details['tasks']}")
+            self.logger.write_line(f"Task - Status: {last_status}")
+        except Exception as e:
+            self.logger.write_line("An error occured trying to run the task")
+            self.logger.write_line(f"{e}")
+
+    def check_task_status(self):
+        if not self.runner_details.get("tasks") or not self.runner_details.get(
+            "cluster"
+        ):
+            self.logger.write_line(
+                f"invalid values for tasks and cluster, these are tasks={self.runner_details.get('tasks')} and cluster={self.runner_details.get('cluster')}"
+            )
+        else:
+            cl = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            res = cl.describe_tasks(**self.runner_details)
+            task = res["tasks"][0]
+            last_status = task["lastStatus"]
+            self.logger.write_line(
+                f"Task ARN: {self.runner_details['tasks'][0]} - Status: {last_status}"
+            )
+
+    def check_sqs_Q(self, queue_url, message_handler):
+        sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
+        resp = sqs_client.receive_message(
+            QueueUrl=queue_url, MaxNumberOfMessages=1, WaitTimeSeconds=20
         )
-
-    def pollQ(self):
-        sqs = self.aws_session.client("sqs")
-        queue_url = "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
-
-        while True:
-            try:
-                response = sqs.receive_message(
-                    QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=20
-                )
-
-                messages = response.get("Messages", [])
-
-                if messages:
-                    for message in messages:
-                        body = message.get("Body", "")
-                        self.logger.write_line(body)
-                        receipt_handle = message["ReceiptHandle"]
-
-                        sqs.delete_message(
-                            QueueUrl=queue_url, ReceiptHandle=receipt_handle
-                        )
-                else:
-                    self.logger.write_line("No messages received.")
-
-            except Exception as e:
-                self.logger.write_line(f"Error receiving messages: {str(e)}")
+        messages = resp.get("Messages", [])
+        for message in messages:
+            self.logger.write_line(message["Body"])
+            sqs_client.delete_message(
+                QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
+            )
 
     def __repr__(self):
-        return f"<BidRunner Input: {'aws connected' if self.aws_is_connected else 'aws NOT connected'}>"
+        return "<BidRunner Input>"
 
 
 # App ---------------------------------------------------
@@ -167,32 +178,55 @@ class BidRunnerApp(App):
                         variant="warning",
                         classes="input-focus",
                     ),
+                    Button(
+                        "Check Task Status",
+                        id="check-task-status",
+                        variant="warning",
+                        classes="input-focus",
+                    ),
                 ),
                 id="main-ui",
             ),
-            Container(Log(), id="log_ui"),
+            Container(Log(auto_scroll=True), id="log_ui"),
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(Log)
         bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
         runner = BidRunner(bid_input_bucket, log)
-        runner.aws_connect(
+        runner.aws_set_credentials(
             os.getenv("AWS_ACCESS_KEY_ID"),
             os.getenv("AWS_SECRET_ACCESS_KEY"),
             os.getenv("AWS_SESSION_TOKEN"),
         )
         if event.button.id == "submit-aws-connection-check":
-            log.write_line(
-                f"Connected to aws? {'Yes' if runner.aws_is_connected else 'No'}"
-            )
+            creds_ok = runner.aws_check_credentials()
+            log.write_line(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
             log.write_line(f"Bid Submitted: {runner}")
             runner.run()
-            poll_thread = threading.Thread(target=runner.pollQ)
-            poll_thread.daemon = True
-            poll_thread.start()
+            # queue_url = (
+            #     "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
+            # )
+            log.write_line(f"CLUSTER: {runner.runner_details.get('cluster_name')}")
+        if event.button.id == "check-task-status":
+            runner.check_task_status()
 
+
+# class A:
+#     def __init__(self):
+#         self.d = {}
+#
+#     def setup(self, a, b):
+#         self.d["a"] = a
+#         self.d["b"] = b
+#
+#     def use(self, add_this):
+#         return self.d.get("a") + add_this
+#
+#     def print_d(self):
+#         print(self.d)
+#
 
 if __name__ == "__main__":
     app = BidRunnerApp()
