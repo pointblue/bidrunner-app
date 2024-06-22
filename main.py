@@ -1,11 +1,11 @@
 import boto3
 from dotenv import load_dotenv
 import os
-from aiobotocore.session import get_session
+from rich.text import Text
 
 from textual import on
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Button, Header, SelectionList, Log, Label
+from textual.widgets import Input, Button, Header, RichLog, SelectionList, Log, Label
 from textual.containers import Container, Horizontal
 from textual.events import Click
 from textual.validation import Length
@@ -16,8 +16,10 @@ class BidRunner:
         self.aws_credentials_set = False
         self.aws_creds = {}
         self.runner_details = {}
+        self.sqs_status = []
+        self.task_status = []
 
-    def set_logger(self, log: Log):
+    def set_logger(self, log: RichLog):
         self.logger = log
 
     def aws_set_credentials(self, access_key, secret_key, session_token):
@@ -28,15 +30,13 @@ class BidRunner:
 
     def aws_check_credentials(self):
         try:
-            self.logger.write_line("trying to connect to aws")
+            self.logger.write("trying to connect to aws")
             s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
             _ = s3.list_buckets()
             return True
         except Exception as e:
-            self.logger.write_line(
-                "unable to connect to aws, with the following error:"
-            )
-            self.logger.write_line(f"{e}")
+            self.logger.write("unable to connect to aws, with the following error:")
+            self.logger.write(f"{e}")
             return False
 
     def run(self):
@@ -45,7 +45,7 @@ class BidRunner:
             task_definition_family = "water-tracker-model-runs"
             task_definition_revision = "8"
             task_definition = f"{task_definition_family}:{task_definition_revision}"
-            self.logger.write_line(f"running bid on cluster: {cluster_name}")
+            self.logger.write(f"running bid on cluster: {cluster_name}")
 
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
             resp = ecs_client.run_task(
@@ -71,25 +71,25 @@ class BidRunner:
             self.runner_details["cluster"] = cluster_name
             self.runner_details["tasks"] = [task_arn]
 
-            self.logger.write_line(
+            self.logger.write(
                 f"Task - running on cluster: {self.runner_details['cluster']}"
             )
-            self.logger.write_line(f"the value of the dict\n{self.runner_details}")
-            self.logger.write_line(f"Task - Arn: {self.runner_details['tasks']}")
-            self.logger.write_line(f"Task - Status: {last_status}")
+            self.logger.write(f"the value of the dict\n{self.runner_details}")
+            self.logger.write(f"Task - Arn: {self.runner_details['tasks']}")
+            self.logger.write(f"Task - Status: {last_status}")
         except Exception as e:
-            self.logger.write_line("An error occured trying to run the task")
-            self.logger.write_line(f"{e}")
+            self.logger.write("An error occured trying to run the task")
+            self.logger.write(f"{e}")
 
     def check_task_status(self):
         if len(self.runner_details) == 0:
-            self.logger.write_line(
+            self.logger.write(
                 f"runner details is empty, did you run the a bid first? Value of runner_details: {self.runner_details}"
             )
         if not self.runner_details.get("tasks") or not self.runner_details.get(
             "cluster"
         ):
-            self.logger.write_line(
+            self.logger.write(
                 f"invalid values for tasks and cluster, these are tasks={self.runner_details.get('tasks')} and cluster={self.runner_details.get('cluster')}"
             )
         else:
@@ -97,21 +97,33 @@ class BidRunner:
             res = cl.describe_tasks(**self.runner_details)
             task = res["tasks"][0]
             last_status = task["lastStatus"]
-            self.logger.write_line(
+            self.logger.write(
                 f"Task ARN: {self.runner_details['tasks'][0]} - Status: {last_status}"
             )
+            self.task_status.append(last_status)
 
-    def check_sqs_Q(self, queue_url, message_handler):
+    def check_sqs_Q(self, queue_url):
         sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
         resp = sqs_client.receive_message(
             QueueUrl=queue_url, MaxNumberOfMessages=1, WaitTimeSeconds=20
         )
         messages = resp.get("Messages", [])
         for message in messages:
-            self.logger.write_line(message["Body"])
+            self.sqs_status.append(message.get("Body"))
             sqs_client.delete_message(
                 QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
             )
+
+    def check_bid_status(self, q_url):
+        self.check_task_status()
+        self.check_sqs_Q(q_url)
+
+        self.logger.write(
+            f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
+        )
+        self.logger.write(
+            f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
+        )
 
     def __repr__(self):
         return "<BidRunner Input>"
@@ -126,8 +138,8 @@ class BidRunnerApp(App):
     def on_mount(self) -> None:
         load_dotenv()
         self.title = "Bidrunner2"
-        log = self.query_one(Log)
-        log.write_line("Welcome to Bidrunner2!")
+        log = self.query_one(RichLog)
+        log.write("Welcome to Bidrunner2!")
         self.runner = BidRunner()
         self.runner.aws_set_credentials(
             os.getenv("AWS_ACCESS_KEY_ID"),
@@ -199,40 +211,26 @@ class BidRunnerApp(App):
                 ),
                 id="main-ui",
             ),
-            Container(Log(auto_scroll=True), id="log_ui"),
+            Container(
+                RichLog(auto_scroll=True, highlight=True, markup=True), id="log_ui"
+            ),
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        log = self.query_one(Log)
+        log = self.query_one(RichLog)
         self.runner.set_logger(log)
-        bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
         if event.button.id == "submit-aws-connection-check":
             creds_ok = self.runner.aws_check_credentials()
-            log.write_line(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
+            log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
             self.runner.run()
-            # queue_url = (
-            #     "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
-            # )
-            log.write_line(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
+            log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
         if event.button.id == "check-task-status":
-            self.runner.check_task_status()
+            queue_url = (
+                "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
+            )
+            self.runner.check_bid_status(queue_url)
 
-
-# class A:
-#     def __init__(self):
-#         self.d = {}
-#
-#     def setup(self, a, b):
-#         self.d["a"] = a
-#         self.d["b"] = b
-#
-#     def use(self, add_this):
-#         return self.d.get("a") + add_this
-#
-#     def print_d(self):
-#         print(self.d)
-#
 
 if __name__ == "__main__":
     app = BidRunnerApp()
