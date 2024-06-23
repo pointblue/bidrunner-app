@@ -27,6 +27,7 @@ class BidRunner:
         self.runner_details = {}
         self.sqs_status = []
         self.task_status = []
+        self.aws_creds_ok = False
 
     def set_logger(self, log: RichLog):
         self.logger = log
@@ -38,14 +39,24 @@ class BidRunner:
         self.aws_creds["aws_session_token"] = session_token
 
     def aws_check_credentials(self):
+        self.logger.write("[bold green]AWS Credentials Check: =================")
         try:
             s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
             _ = s3.list_buckets()
+            self.aws_creds_ok = True
+            self.logger.write("Succesully performed AWS credential check")
             return True
         except Exception as e:
-            self.logger.write("unable to connect to aws, with the following error:")
-            self.logger.write(f"{e}")
+            self.logger.write(
+                "Unable to connect to aws. The following error was received:"
+            )
+            self.logger.write(f"[bold magenta]{e}")
+            self.logger.write(
+                "Your aws credentials should be set in an [bold green]`.env`[/bold green] file in the same directory where this app is being run. Consult the manual for details on the format of this file."
+            )
             return False
+        finally:
+            self.logger.write("[bold green]=================")
 
     def run(self):
         try:
@@ -123,21 +134,24 @@ class BidRunner:
             )
 
     def check_bid_status(self, q_url):
-        self.check_task_status()
-        self.check_sqs_Q(q_url)
+        if self.aws_creds_ok:
+            self.check_task_status()
+            self.check_sqs_Q(q_url)
 
-        if len(self.task_status) > 0:
-            self.logger.write(
-                f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
-            )
+            if len(self.task_status) > 0:
+                self.logger.write(
+                    f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
+                )
+            else:
+                self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
+            if len(self.sqs_status) > 0:
+                self.logger.write(
+                    f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
+                )
+            else:
+                self.logger.write("[bold blue]Bid - no new messages[/bold blue]")
         else:
-            self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
-        if len(self.sqs_status) > 0:
-            self.logger.write(
-                f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
-            )
-        else:
-            self.logger.write("[bold blue]Bid - no new messages[/bold blue]")
+            self.logger.write("Setup aws account credentials to check status.")
 
     def __repr__(self):
         return "<BidRunner Input>"
@@ -161,10 +175,15 @@ class BidRunnerApp(App):
             os.getenv("AWS_SESSION_TOKEN"),
         )
         self.notify("Welcome to bidrunner2!")
-        self.notify("Enter bid details and click submit to spawn model run")
+        self.notify(
+            "Enter bid details and click submit to spawn model run. Make sure you have set up your AWS credentials on this machine, for more information, please consult the accopanying manual.",
+            timeout=15,
+        )
 
     def compose(self) -> ComposeResult:
-        rl = RichLog(auto_scroll=True, highlight=True, markup=True, id="bid-run-logs")
+        rl = RichLog(
+            auto_scroll=True, highlight=True, markup=True, id="bid-run-logs", wrap=True
+        )
         rl.border_title = "Run Logs"
         yield Header()
         yield Horizontal(
@@ -172,25 +191,41 @@ class BidRunnerApp(App):
                 Input(
                     placeholder="Bid Name",
                     id="bid-name",
-                    classes="input-focus",
+                    classes="input-focus input-element",
                     validators=[Length(minimum=1)],
                     validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Input data bucket",
                     id="bid-input-bucket",
-                    classes="input-focus",
+                    classes="input-focus input-element",
                     validators=[Length(minimum=1)],
                     validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Auction Id",
                     id="bid-auction-id",
-                    classes="input-focus",
+                    classes="input-focus input-element",
                     validators=[Length(minimum=1)],
                     validate_on=["blur"],
                 ),
-                Input(placeholder="enter bid id", id="bid-id", classes="input-focus"),
+                Input(
+                    placeholder="Auction shapefile",
+                    id="bid-auction-shapefile",
+                    classes="input-focus input-element",
+                    validators=[Length(minimum=1)],
+                    validate_on=["blur"],
+                ),
+                Input(
+                    placeholder="enter bid split id",
+                    id="bid-split-id",
+                    classes="input-focus input-element",
+                ),
+                Input(
+                    placeholder="enter bid id",
+                    id="bid-id",
+                    classes="input-focus input-element",
+                ),
                 SelectionList[int](
                     ("January", 1, True),
                     ("February", 2),
@@ -199,12 +234,17 @@ class BidRunnerApp(App):
                     ("May", 5),
                     ("June", 6),
                     id="bid-months",
-                    classes="input-focus",
+                    classes="input-focus input-element",
                 ),
                 Input(
-                    placeholder="enter bid split id",
-                    id="bid-split-id",
-                    classes="input-focus",
+                    placeholder="Waterfiles",
+                    id="bid-wateffiles",
+                    classes="input-focus input-element",
+                ),
+                Input(
+                    placeholder="Output bucket",
+                    id="bid-output-bucket",
+                    classes="input-focus input-element",
                 ),
                 Label(id="validation_errors"),
                 Horizontal(
@@ -212,20 +252,18 @@ class BidRunnerApp(App):
                         "Submit",
                         id="submit_run",
                         variant="default",
-                        classes="input-focus",
                     ),
                     Button(
                         "Check AWS Connection",
                         id="submit-aws-connection-check",
-                        variant="warning",
-                        classes="input-focus",
+                        variant="default",
                     ),
                     Button(
                         "Check Task Status",
                         id="check-task-status",
-                        variant="warning",
-                        classes="input-focus",
+                        variant="default",
                     ),
+                    id="buttons-row",
                 ),
                 id="main-ui",
             ),

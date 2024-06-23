@@ -1,37 +1,22 @@
-#bid-id {
-    margin-bottom: 1;
-}
-
-
-#bid-months {
-   margin-bottom: 1;
-}
-
-
-#bid-split-id {
-   margin-bottom: 1;
-}
-
 #main-ui {
-    margin: 2;
+    margin-top: 2;
     width: 40%
 }
 
-#log_ui {margin: 2; width: 60%}
+#log_ui {margin: 1; width: 60%}
 
-#submit_run {
-}
-
-#bid-name {margin-bottom: 1;}
-#bid-input-bucket {margin-bottom: 1;}
-#bid-auction-id {margin-bottom: 1;}
-#submit-aws-connection-check {margin-left: 1;}
+#submit-aws-connection-check {margin-left: 1; margin-right:1;}
+#buttons-row {margin-left: 1;}
 
 .input-focus:focus {
     background: #273257 20%;
 }
 
 #bid-run-logs {
-    border: solid $secondary;
+    border: solid orange;
     border-title-align: left;
+}
+
+.input-element {
+    margin-bottom: 1;
 }
