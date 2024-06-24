@@ -1,9 +1,9 @@
 import boto3
 from dotenv import load_dotenv
 import os
-from rich.text import Text
+import asyncio
+from pathlib import Path
 
-from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Input,
@@ -11,12 +11,9 @@ from textual.widgets import (
     Header,
     RichLog,
     SelectionList,
-    Log,
     Label,
-    Tabs,
 )
 from textual.containers import Container, Horizontal
-from textual.events import Click
 from textual.validation import Length
 
 
@@ -116,27 +113,43 @@ class BidRunner:
             res = cl.describe_tasks(**self.runner_details)
             task = res["tasks"][0]
             last_status = task["lastStatus"]
-            self.logger.write(
-                f"Task ARN: {self.runner_details['tasks'][0]} - Status: {last_status}"
-            )
             self.task_status.append(last_status)
 
-    def check_sqs_Q(self, queue_url):
+    async def check_sqs_Q(self, queue_url):
+        self.logger.write("[bold yellow]Retrieving Bid messages...[/bold yellow]")
         sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
-        resp = sqs_client.receive_message(
-            QueueUrl=queue_url, MaxNumberOfMessages=10, WaitTimeSeconds=5
-        )
-        messages = resp.get("Messages", [])
-        for message in messages:
-            self.sqs_status.append(message.get("Body"))
-            sqs_client.delete_message(
-                QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
+        try:
+            response = await asyncio.to_thread(
+                sqs_client.receive_message,
+                QueueUrl=queue_url,
+                MaxNumberOfMessages=10,
+                WaitTimeSeconds=10,
             )
+            messages = response.get("Messages", [])
+            if messages:
+                for message in messages:
+                    self.sqs_status.append(message.get("Body"))
+                    await asyncio.to_thread(
+                        sqs_client.delete_message,
+                        QueueUrl=queue_url,
+                        ReceiptHandle=message["ReceiptHandle"],
+                    )
+            else:
+                self.logger.write("[bold blue]No new messages.[/bold blue]")
+        except Exception as e:
+            self.logger.write(f"[bold red]Error retrieving messages: {e}[/bold red]")
+        finally:
+            self.logger.write(
+                "[bold yellow]Finished retrieving messages.[/bold yellow]"
+            )
+            for msg in self.sqs_status:
+                self.logger.write(f"[bold blue]Bid Status:[/bold blue] {msg}")
+            self.sqs_status = []
 
-    def check_bid_status(self, q_url):
+    async def check_bid_status(self, q_url):
         if self.aws_creds_ok:
             self.check_task_status()
-            self.check_sqs_Q(q_url)
+            await self.check_sqs_Q(q_url)
 
             if len(self.task_status) > 0:
                 self.logger.write(
@@ -145,9 +158,9 @@ class BidRunner:
             else:
                 self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
             if len(self.sqs_status) > 0:
-                self.logger.write(
-                    f"[bold blue]Bid - status:[/bold blue] {self.sqs_status.pop()}"
-                )
+                for message in self.sqs_status:
+                    self.logger.write(f"[bold blue]Bid Status:[/bold blue] {message}")
+                self.sqs_status = []
             else:
                 self.logger.write("[bold blue]Bid - no new messages[/bold blue]")
         else:
@@ -161,7 +174,7 @@ class BidRunner:
 
 
 class BidRunnerApp(App):
-    CSS_PATH = "styles.tcss"
+    CSS_PATH = str(Path(__file__).parent / "styles.tcss")
 
     def on_mount(self) -> None:
         load_dotenv()
@@ -269,11 +282,12 @@ class BidRunnerApp(App):
             ),
             Container(
                 rl,
+                Button("Clear Logs", id="clear-logs", variant="error"),
                 id="log_ui",
             ),
         )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(RichLog)
         self.runner.set_logger(log)
         if event.button.id == "submit-aws-connection-check":
@@ -292,9 +306,15 @@ class BidRunnerApp(App):
             queue_url = (
                 "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
             )
-            self.runner.check_bid_status(queue_url)
+            await self.runner.check_bid_status(queue_url)
+        if event.button.id == "clear-logs":
+            log.clear()
+
+
+def main():
+    app = BidRunnerApp()
+    app.run()
 
 
 if __name__ == "__main__":
-    app = BidRunnerApp()
-    app.run()
+    main()
