@@ -262,7 +262,11 @@ class BidRunnerApp(App):
                 ),
                 Input(
                     placeholder="Waterfiles",
+<<<<<<< ours
+                    id="bid-waterfiles",
+=======
                     id="bid-wateffiles",
+>>>>>>> theirs
                     classes="input-focus input-element",
                 ),
                 Input(
@@ -311,8 +315,20 @@ class BidRunnerApp(App):
             )
             # log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
-            self.runner.run()
-            log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
+            bid_name = self.query_one("#bid-name", Input).value
+            bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
+            bid_auction_id = self.query_one("#bid-auction-id", Input).value
+            bid_auction_shapefile = self.query_one(
+                "#bid-auction-shapefile", Input
+            ).value
+            bid_split_id = self.query_one("#bid-split-id", Input).value
+            bid_id = self.query_one("#bid-id", Input).value
+            bid_months = self.query_one("#bid-months", SelectionList).selected
+            bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
+            bid_output_bucket = self.query_one("#bid-output-bucket", Input).value
+
+            # self.runner.run()
+            # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
         if event.button.id == "check-task-status":
             queue_url = (
                 "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
