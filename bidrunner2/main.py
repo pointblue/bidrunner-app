@@ -97,6 +97,17 @@ class BidRunner:
             self.logger.write("An error occured trying to run the task")
             self.logger.write(f"{e}")
 
+    def get_all_running_tasks(self):
+        """
+        Get a list of all the running tasks that are related to water tracker
+        """
+        ecs_cl = boto3.client("ecs", **self.aws_creds, region_name="us-west-2")
+        resp = ecs_cl.list_tasks(
+            cluster="WaterTrackerDevCluster", desiredStatus="RUNNING"
+        )
+        task_list = resp.get("taskArns")
+        return task_list
+
     def check_task_status(self):
         if len(self.runner_details) == 0:
             self.logger.write(
