@@ -29,7 +29,8 @@
                     "value": "ENTER_SECRET_ACCESS_KEY"
                 }
             ],
-            "commands": []
+            "commands": [
+            ],
             "environmentFiles": [],
             "mountPoints": [],
             "volumesFrom": [],
