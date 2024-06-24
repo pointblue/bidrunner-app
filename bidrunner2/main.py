@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 from pathlib import Path
+import json
 
 from textual.app import App, ComposeResult
 from textual.widgets import (
@@ -28,6 +29,21 @@ class BidRunner:
 
     def set_logger(self, log: RichLog):
         self.logger = log
+
+    def _parse_base_ecs_definition(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, "resources", "ecs-def.json")
+        with open(json_path) as f:
+            ecs_def = json.load(f)
+        return ecs_def
+
+    def create_task_definition(self, *args):
+        ecs_def = self._parse_base_ecs_definition()
+        ecs_def.get("containerDefinitions")[0]["environment"] = [
+            {"name": k, "value": v} for k, v in self.aws_creds.items()
+        ]
+        ecs_def.get("containerDefinitions")[0]["commands"] = args
+        return ecs_def
 
     def aws_set_credentials(self, access_key, secret_key, session_token):
         self.aws_creds = {}
@@ -55,7 +71,7 @@ class BidRunner:
         finally:
             self.logger.write("[bold green]=================")
 
-    def run(self):
+    def run(self, task_definition):
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
@@ -262,11 +278,7 @@ class BidRunnerApp(App):
                 ),
                 Input(
                     placeholder="Waterfiles",
-<<<<<<< ours
                     id="bid-waterfiles",
-=======
-                    id="bid-wateffiles",
->>>>>>> theirs
                     classes="input-focus input-element",
                 ),
                 Input(
@@ -326,6 +338,22 @@ class BidRunnerApp(App):
             bid_months = self.query_one("#bid-months", SelectionList).selected
             bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
             bid_output_bucket = self.query_one("#bid-output-bucket", Input).value
+
+            all_inputs = [
+                bid_name,
+                bid_input_bucket,
+                bid_auction_id,
+                bid_auction_shapefile,
+                bid_split_id,
+                bid_id,
+                bid_months,
+                bid_waterfiles,
+                bid_output_bucket,
+            ]
+
+            task_definition = self.runner.create_task_definition(all_inputs)
+
+            log.write(f"{task_definition}")
 
             # self.runner.run()
             # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
