@@ -14,7 +14,13 @@ from textual.widgets import (
     SelectionList,
     Label,
 )
-from textual.containers import Container, Horizontal
+from textual.containers import (
+    Container,
+    Horizontal,
+    HorizontalScroll,
+    Vertical,
+    VerticalScroll,
+)
 from textual.validation import Length
 
 
@@ -202,13 +208,12 @@ class BidRunner:
 
 
 class BidRunnerApp(App):
-    CSS_PATH = str(Path(__file__).parent / "styles.tcss")
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    CSS_PATH = os.path.join(current_dir, "resources", "styles.tcss")
 
     def on_mount(self) -> None:
         load_dotenv()
         self.title = "Bidrunner2"
-        # log = self.query_one(RichLog)
-        # log.write("Welcome to Bidrunner2!")
         self.runner = BidRunner()
         self.runner.aws_set_credentials(
             os.getenv("AWS_ACCESS_KEY_ID"),
@@ -216,10 +221,6 @@ class BidRunnerApp(App):
             os.getenv("AWS_SESSION_TOKEN"),
         )
         self.notify("Welcome to bidrunner2!")
-        self.notify(
-            "Enter bid details and click submit to spawn model run. Make sure you have set up your AWS credentials on this machine, for more information, please consult the accopanying manual.",
-            timeout=15,
-        )
 
     def compose(self) -> ComposeResult:
         rl = RichLog(
@@ -227,35 +228,27 @@ class BidRunnerApp(App):
         )
         rl.border_title = "Run Logs"
         yield Header()
-        yield Horizontal(
-            Container(
+        yield HorizontalScroll(
+            VerticalScroll(
                 Input(
                     placeholder="Bid Name",
                     id="bid-name",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Input data bucket",
                     id="bid-input-bucket",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Auction Id",
                     id="bid-auction-id",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Auction shapefile",
                     id="bid-auction-shapefile",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="enter bid split id",
@@ -287,7 +280,6 @@ class BidRunnerApp(App):
                     id="bid-output-bucket",
                     classes="input-focus input-element",
                 ),
-                Label(id="validation_errors"),
                 Horizontal(
                     Button(
                         "Submit",
@@ -314,6 +306,31 @@ class BidRunnerApp(App):
                 id="log_ui",
             ),
         )
+
+    def validate_inputs(self) -> None:
+        input_ids = [
+            "#bid-name",
+            "#bid-input-bucket",
+            "#bid-auction-id",
+            "#bid-auction-shapefile",
+            "#bid-split-id",
+            "#bid-id",
+            # "#bid-months",
+            "#bid-waterfiles",
+            "#bid-output-bucket",
+        ]
+        show_notification = False
+        for id in input_ids:
+            widget_element = self.query_one(id, Input)
+            if not widget_element.value:
+                show_notification = True
+                widget_element.add_class("error")
+            else:
+                widget_element.remove_class("error")
+        if show_notification:
+            self.notify(
+                "invalid form, please submit all required fields", severity="error"
+            )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(RichLog)
@@ -349,7 +366,7 @@ class BidRunnerApp(App):
                 "jun",
                 "jul",
                 "aug",
-                "sept",
+                "sep",
                 "oct",
                 "nov",
                 "dec",
@@ -370,7 +387,7 @@ class BidRunnerApp(App):
 
             task_definition = self.runner.create_task_definition(all_inputs)
 
-            log.write(f"{task_definition}")
+            self.validate_inputs()
 
             # self.runner.run()
             # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")

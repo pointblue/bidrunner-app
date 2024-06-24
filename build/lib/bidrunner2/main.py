@@ -1,12 +1,10 @@
-from sys import exception
 import boto3
 from dotenv import load_dotenv
 import os
-from rich.text import Text
 import asyncio
 from pathlib import Path
+import json
 
-from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Input,
@@ -14,12 +12,15 @@ from textual.widgets import (
     Header,
     RichLog,
     SelectionList,
-    Log,
     Label,
-    Tabs,
 )
-from textual.containers import Container, Horizontal
-from textual.events import Click
+from textual.containers import (
+    Container,
+    Horizontal,
+    HorizontalScroll,
+    Vertical,
+    VerticalScroll,
+)
 from textual.validation import Length
 
 
@@ -34,6 +35,21 @@ class BidRunner:
 
     def set_logger(self, log: RichLog):
         self.logger = log
+
+    def _parse_base_ecs_definition(self):
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        json_path = os.path.join(current_dir, "resources", "ecs-def.json")
+        with open(json_path) as f:
+            ecs_def = json.load(f)
+        return ecs_def
+
+    def create_task_definition(self, args):
+        ecs_def = self._parse_base_ecs_definition()
+        ecs_def.get("containerDefinitions")[0]["environment"] = [
+            {"name": k, "value": v} for k, v in self.aws_creds.items()
+        ]
+        ecs_def.get("containerDefinitions")[0]["commands"] = args
+        return ecs_def
 
     def aws_set_credentials(self, access_key, secret_key, session_token):
         self.aws_creds = {}
@@ -61,7 +77,7 @@ class BidRunner:
         finally:
             self.logger.write("[bold green]=================")
 
-    def run(self):
+    def run(self, task_definition):
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
@@ -70,6 +86,7 @@ class BidRunner:
             self.logger.write(f"running bid on cluster: {cluster_name}")
 
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            ecs_client.register_task_definition(**task_definition)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
                 taskDefinition=task_definition,
@@ -102,6 +119,17 @@ class BidRunner:
         except Exception as e:
             self.logger.write("An error occured trying to run the task")
             self.logger.write(f"{e}")
+
+    def get_all_running_tasks(self):
+        """
+        Get a list of all the running tasks that are related to water tracker
+        """
+        ecs_cl = boto3.client("ecs", **self.aws_creds, region_name="us-west-2")
+        resp = ecs_cl.list_tasks(
+            cluster="WaterTrackerDevCluster", desiredStatus="RUNNING"
+        )
+        task_list = resp.get("taskArns")
+        return task_list
 
     def check_task_status(self):
         if len(self.runner_details) == 0:
@@ -180,7 +208,8 @@ class BidRunner:
 
 
 class BidRunnerApp(App):
-    CSS_PATH = str(Path(__file__).parent / "styles.tcss")
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    CSS_PATH = os.path.join(current_dir, "resources", "styles.tcss")
 
     def on_mount(self) -> None:
         load_dotenv()
@@ -194,10 +223,6 @@ class BidRunnerApp(App):
             os.getenv("AWS_SESSION_TOKEN"),
         )
         self.notify("Welcome to bidrunner2!")
-        self.notify(
-            "Enter bid details and click submit to spawn model run. Make sure you have set up your AWS credentials on this machine, for more information, please consult the accopanying manual.",
-            timeout=15,
-        )
 
     def compose(self) -> ComposeResult:
         rl = RichLog(
@@ -205,35 +230,27 @@ class BidRunnerApp(App):
         )
         rl.border_title = "Run Logs"
         yield Header()
-        yield Horizontal(
-            Container(
+        yield HorizontalScroll(
+            VerticalScroll(
                 Input(
                     placeholder="Bid Name",
                     id="bid-name",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Input data bucket",
                     id="bid-input-bucket",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Auction Id",
                     id="bid-auction-id",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="Auction shapefile",
                     id="bid-auction-shapefile",
                     classes="input-focus input-element",
-                    validators=[Length(minimum=1)],
-                    validate_on=["blur"],
                 ),
                 Input(
                     placeholder="enter bid split id",
@@ -246,18 +263,18 @@ class BidRunnerApp(App):
                     classes="input-focus input-element",
                 ),
                 SelectionList[int](
-                    ("January", 1, True),
-                    ("February", 2),
-                    ("March", 3),
-                    ("April", 4),
-                    ("May", 5),
-                    ("June", 6),
+                    ("January", 0, True),
+                    ("February", 1),
+                    ("March", 2),
+                    ("April", 3),
+                    ("May", 4),
+                    ("June", 5),
                     id="bid-months",
                     classes="input-focus input-element",
                 ),
                 Input(
                     placeholder="Waterfiles",
-                    id="bid-wateffiles",
+                    id="bid-waterfiles",
                     classes="input-focus input-element",
                 ),
                 Input(
@@ -265,7 +282,6 @@ class BidRunnerApp(App):
                     id="bid-output-bucket",
                     classes="input-focus input-element",
                 ),
-                Label(id="validation_errors"),
                 Horizontal(
                     Button(
                         "Submit",
@@ -293,6 +309,31 @@ class BidRunnerApp(App):
             ),
         )
 
+    def validate_inputs(self) -> None:
+        input_ids = [
+            "#bid-name",
+            "#bid-input-bucket",
+            "#bid-auction-id",
+            "#bid-auction-shapefile",
+            "#bid-split-id",
+            "#bid-id",
+            # "#bid-months",
+            "#bid-waterfiles",
+            "#bid-output-bucket",
+        ]
+        show_notification = False
+        for id in input_ids:
+            widget_element = self.query_one(id, Input)
+            if not widget_element.value:
+                show_notification = True
+                widget_element.add_class("error")
+            else:
+                widget_element.remove_class("error")
+        if show_notification:
+            self.notify(
+                "invalid form, please submit all required fields", severity="error"
+            )
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(RichLog)
         self.runner.set_logger(log)
@@ -306,8 +347,52 @@ class BidRunnerApp(App):
             )
             # log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
-            self.runner.run()
-            log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
+            bid_name = self.query_one("#bid-name", Input).value
+            bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
+            bid_auction_id = self.query_one("#bid-auction-id", Input).value
+            bid_auction_shapefile = self.query_one(
+                "#bid-auction-shapefile", Input
+            ).value
+            bid_split_id = self.query_one("#bid-split-id", Input).value
+            bid_id = self.query_one("#bid-id", Input).value
+            bid_months = self.query_one("#bid-months", SelectionList).selected
+            bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
+            bid_output_bucket = self.query_one("#bid-output-bucket", Input).value
+
+            months = [
+                "jan",
+                "feb",
+                "mar",
+                "apr",
+                "may",
+                "jun",
+                "jul",
+                "aug",
+                "sep",
+                "oct",
+                "nov",
+                "dec",
+            ]
+            selected_months = [months[i] for i in bid_months]
+
+            all_inputs = [
+                bid_name,
+                bid_input_bucket,
+                bid_auction_id,
+                bid_auction_shapefile,
+                bid_split_id,
+                bid_id,
+                selected_months,
+                bid_waterfiles,
+                bid_output_bucket,
+            ]
+
+            task_definition = self.runner.create_task_definition(all_inputs)
+
+            self.validate_inputs()
+
+            # self.runner.run()
+            # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
         if event.button.id == "check-task-status":
             queue_url = (
                 "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"

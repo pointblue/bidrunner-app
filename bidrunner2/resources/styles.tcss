@@ -1,6 +1,7 @@
 #main-ui {
     margin-top: 2;
-    width: 40%
+    width: 40%;
+    overflow-y: scroll
 }
 
 #log_ui {margin: 1; width: 60%}
@@ -19,4 +20,8 @@
 
 .input-element {
     margin-bottom: 1;
+}
+
+Input.error {
+    background: #9c4038;
 }
