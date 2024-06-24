@@ -1,0 +1,61 @@
+{
+    "family": "water-tracker-model-runs",
+    "containerDefinitions": [
+        {
+            "name": "water-tracker",
+            "image": "975050180415.dkr.ecr.us-west-2.amazonaws.com/water-tracker:latest",
+            "cpu": 0,
+            "portMappings": [
+                {
+                    "name": "water-tracker-80-tcp",
+                    "containerPort": 80,
+                    "hostPort": 80,
+                    "protocol": "tcp",
+                    "appProtocol": "http"
+                }
+            ],
+            "essential": true,
+            "environment": [
+                {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "ENTER_AWS_KEY_ID"
+                },
+                {
+                    "name": "AWS_SESSION_TOKEN",
+                    "value": "ENTER_SESSION_TOKEN"
+                },
+                {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "ENTER_SECRET_ACCESS_KEY"
+                }
+            ],
+            "commands": []
+            "environmentFiles": [],
+            "mountPoints": [],
+            "volumesFrom": [],
+            "ulimits": [],
+            "logConfiguration": {
+                "logDriver": "awslogs",
+                "options": {
+                    "awslogs-group": "/ecs/water-tracker-model-runs",
+                    "awslogs-create-group": "true",
+                    "awslogs-region": "us-west-2",
+                    "awslogs-stream-prefix": "ecs"
+                },
+                "secretOptions": []
+            },
+            "systemControls": []
+        }
+    ],
+    "executionRoleArn": "arn:aws:iam::975050180415:role/ecsTaskExecutionRole",
+    "networkMode": "awsvpc",
+    "requiresCompatibilities": [
+        "FARGATE"
+    ],
+    "cpu": "1024",
+    "memory": "3072",
+    "runtimePlatform": {
+        "cpuArchitecture": "X86_64",
+        "operatingSystemFamily": "LINUX"
+    }
+}
