@@ -29,7 +29,7 @@
                     "value": "ENTER_SECRET_ACCESS_KEY"
                 }
             ],
-            "command": [
+            "commands": [
             ],
             "environmentFiles": [],
             "mountPoints": [],

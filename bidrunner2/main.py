@@ -37,7 +37,7 @@ class BidRunner:
             ecs_def = json.load(f)
         return ecs_def
 
-    def create_task_definition(self, *args):
+    def create_task_definition(self, args):
         ecs_def = self._parse_base_ecs_definition()
         ecs_def.get("containerDefinitions")[0]["environment"] = [
             {"name": k, "value": v} for k, v in self.aws_creds.items()
@@ -267,12 +267,12 @@ class BidRunnerApp(App):
                     classes="input-focus input-element",
                 ),
                 SelectionList[int](
-                    ("January", 1, True),
-                    ("February", 2),
-                    ("March", 3),
-                    ("April", 4),
-                    ("May", 5),
-                    ("June", 6),
+                    ("January", 0, True),
+                    ("February", 1),
+                    ("March", 2),
+                    ("April", 3),
+                    ("May", 4),
+                    ("June", 5),
                     id="bid-months",
                     classes="input-focus input-element",
                 ),
@@ -339,6 +339,22 @@ class BidRunnerApp(App):
             bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
             bid_output_bucket = self.query_one("#bid-output-bucket", Input).value
 
+            months = [
+                "jan",
+                "feb",
+                "mar",
+                "apr",
+                "may",
+                "jun",
+                "jul",
+                "aug",
+                "sept",
+                "oct",
+                "nov",
+                "dec",
+            ]
+            selected_months = [months[i] for i in bid_months]
+
             all_inputs = [
                 bid_name,
                 bid_input_bucket,
@@ -346,7 +362,7 @@ class BidRunnerApp(App):
                 bid_auction_shapefile,
                 bid_split_id,
                 bid_id,
-                bid_months,
+                selected_months,
                 bid_waterfiles,
                 bid_output_bucket,
             ]
