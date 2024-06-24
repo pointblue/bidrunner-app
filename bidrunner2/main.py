@@ -80,6 +80,7 @@ class BidRunner:
             self.logger.write(f"running bid on cluster: {cluster_name}")
 
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            ecs_client.register_task_definition(**task_definition)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
                 taskDefinition=task_definition,
