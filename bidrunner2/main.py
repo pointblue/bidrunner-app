@@ -55,6 +55,25 @@ class BidRunner:
         ecs_def.get("containerDefinitions")[0]["commands"] = args
         return ecs_def
 
+    def overwrite_task_definitions(self, cluster_name, task_name, args):
+        return {
+            "cluster": cluster_name,
+            "taskDefinition": task_name,
+            "launchType": "FARGATE",  # or 'FARGATE' if using Fargate
+            "overrides": {
+                "containerOverrides": [
+                    {
+                        "name": "water-tracker",
+                        "command": args,
+                        "environment": [
+                            {"name": k, "value": v} for k, v in self.aws_creds.items()
+                        ],
+                    },
+                ],
+            },
+            "count": 1,
+        }
+
     def aws_set_credentials(self, access_key, secret_key, session_token):
         self.aws_creds = {}
         self.aws_creds["aws_access_key_id"] = access_key
@@ -81,7 +100,7 @@ class BidRunner:
         finally:
             self.logger.write("[bold green]=================")
 
-    def run(self, task_definition):
+    def run(self, args):
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
@@ -90,7 +109,6 @@ class BidRunner:
             self.logger.write(f"running bid on cluster: {cluster_name}")
 
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
-            ecs_client.register_task_definition(**task_definition)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
                 taskDefinition=task_definition,
@@ -106,6 +124,18 @@ class BidRunner:
                         ],  # Replace with your subnet ID
                         "assignPublicIp": "ENABLED",
                     }
+                },
+                overrides={
+                    "containerOverrides": [
+                        {
+                            "name": "water-tracker",
+                            "command": args,
+                            "environment": [
+                                {"name": k, "value": v}
+                                for k, v in self.aws_creds.items()
+                            ],
+                        }
+                    ]
                 },
             )
 
@@ -314,9 +344,13 @@ class BidRunnerApp(App):
                     ),
                 )
             with TabPane("Existing Bids"):
-                yield Markdown("Hello")
+                yield Markdown("## Check Existing Runs")
+            with TabPane("Manual"):
+                with open("bidrunner2/resources/manual.md", "r") as f:
+                    yield Markdown(f.read())
 
-    def validate_inputs_and_notify(self) -> None:
+    def validate_inputs_and_notify(self) -> bool:
+        all_pass = True
         input_ids = [
             "#bid-name",
             "#bid-input-bucket",
@@ -333,6 +367,7 @@ class BidRunnerApp(App):
             widget_element = self.query_one(id, Input)
             if not widget_element.value:
                 show_notification = True
+                all_pass = False
                 widget_element.add_class("error")
             else:
                 widget_element.remove_class("error")
@@ -340,6 +375,8 @@ class BidRunnerApp(App):
             self.notify(
                 "invalid form, please submit all required fields", severity="error"
             )
+
+        return all_pass
 
     @on(Input.Changed)
     def remove_error_class(self):
@@ -407,16 +444,13 @@ class BidRunnerApp(App):
                 bid_auction_shapefile,
                 bid_split_id,
                 bid_id,
-                selected_months,
+                ",".join(selected_months),
                 bid_waterfiles,
                 bid_output_bucket,
             ]
 
-            task_definition = self.runner.create_task_definition(all_inputs)
-
-            self.validate_inputs_and_notify()
-
-            # self.runner.run()
+            if self.validate_inputs_and_notify():
+                self.runner.run(all_inputs)
             # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
         if event.button.id == "check-task-status":
             queue_url = (
