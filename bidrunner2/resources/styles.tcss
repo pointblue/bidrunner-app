@@ -23,5 +23,5 @@
 }
 
 Input.error {
-    background: #9c4038;
+    background: #ab2c2c;
 }

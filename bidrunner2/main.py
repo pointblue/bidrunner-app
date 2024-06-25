@@ -5,14 +5,18 @@ import asyncio
 from pathlib import Path
 import json
 
+from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Input,
     Button,
     Header,
+    Markdown,
     RichLog,
     SelectionList,
     Label,
+    TabbedContent,
+    TabPane,
 )
 from textual.containers import (
     Container,
@@ -228,86 +232,91 @@ class BidRunnerApp(App):
         )
         rl.border_title = "Run Logs"
         yield Header()
-        yield HorizontalScroll(
-            VerticalScroll(
-                Input(
-                    placeholder="Bid Name",
-                    id="bid-name",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="Input data bucket",
-                    id="bid-input-bucket",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="Auction Id",
-                    id="bid-auction-id",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="Auction shapefile",
-                    id="bid-auction-shapefile",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="enter bid split id",
-                    id="bid-split-id",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="enter bid id",
-                    id="bid-id",
-                    classes="input-focus input-element",
-                ),
-                SelectionList[int](
-                    ("January", 0, True),
-                    ("February", 1),
-                    ("March", 2),
-                    ("April", 3),
-                    ("May", 4),
-                    ("June", 5),
-                    id="bid-months",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="Waterfiles",
-                    id="bid-waterfiles",
-                    classes="input-focus input-element",
-                ),
-                Input(
-                    placeholder="Output bucket",
-                    id="bid-output-bucket",
-                    classes="input-focus input-element",
-                ),
-                Horizontal(
-                    Button(
-                        "Submit",
-                        id="submit_run",
-                        variant="default",
+        with TabbedContent():
+            with TabPane("New Bid"):
+                yield HorizontalScroll(
+                    VerticalScroll(
+                        Input(
+                            placeholder="Bid Name",
+                            id="bid-name",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="Input data bucket",
+                            id="bid-input-bucket",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="Auction Id",
+                            id="bid-auction-id",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="Auction shapefile",
+                            id="bid-auction-shapefile",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="enter bid split id",
+                            id="bid-split-id",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="enter bid id",
+                            id="bid-id",
+                            classes="input-focus input-element",
+                        ),
+                        SelectionList[int](
+                            ("January", 0, True),
+                            ("February", 1),
+                            ("March", 2),
+                            ("April", 3),
+                            ("May", 4),
+                            ("June", 5),
+                            id="bid-months",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="Waterfiles",
+                            id="bid-waterfiles",
+                            classes="input-focus input-element",
+                        ),
+                        Input(
+                            placeholder="Output bucket",
+                            id="bid-output-bucket",
+                            classes="input-focus input-element",
+                        ),
+                        Horizontal(
+                            Button(
+                                "Submit",
+                                id="submit_run",
+                                variant="default",
+                            ),
+                            Button(
+                                "Check AWS Connection",
+                                id="submit-aws-connection-check",
+                                variant="default",
+                            ),
+                            Button(
+                                "Check Task Status",
+                                id="check-task-status",
+                                variant="default",
+                            ),
+                            Button("Clear Form", id="clear-form", variant="default"),
+                            id="buttons-row",
+                        ),
+                        id="main-ui",
                     ),
-                    Button(
-                        "Check AWS Connection",
-                        id="submit-aws-connection-check",
-                        variant="default",
+                    Container(
+                        rl,
+                        Button("Clear Logs", id="clear-logs", variant="error"),
+                        id="log_ui",
                     ),
-                    Button(
-                        "Check Task Status",
-                        id="check-task-status",
-                        variant="default",
-                    ),
-                    id="buttons-row",
-                ),
-                id="main-ui",
-            ),
-            Container(
-                rl,
-                Button("Clear Logs", id="clear-logs", variant="error"),
-                id="log_ui",
-            ),
-        )
+                )
+            with TabPane("Existing Bids"):
+                yield Markdown("Hello")
 
-    def validate_inputs(self) -> None:
+    def validate_inputs_and_notify(self) -> None:
         input_ids = [
             "#bid-name",
             "#bid-input-bucket",
@@ -331,6 +340,24 @@ class BidRunnerApp(App):
             self.notify(
                 "invalid form, please submit all required fields", severity="error"
             )
+
+    @on(Input.Changed)
+    def remove_error_class(self):
+        input_ids = [
+            "#bid-name",
+            "#bid-input-bucket",
+            "#bid-auction-id",
+            "#bid-auction-shapefile",
+            "#bid-split-id",
+            "#bid-id",
+            # "#bid-months",
+            "#bid-waterfiles",
+            "#bid-output-bucket",
+        ]
+        for id in input_ids:
+            elem = self.query_one(id, Input)
+            if elem.value:
+                elem.remove_class("error")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one(RichLog)
@@ -387,7 +414,7 @@ class BidRunnerApp(App):
 
             task_definition = self.runner.create_task_definition(all_inputs)
 
-            self.validate_inputs()
+            self.validate_inputs_and_notify()
 
             # self.runner.run()
             # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
@@ -398,6 +425,22 @@ class BidRunnerApp(App):
             await self.runner.check_bid_status(queue_url)
         if event.button.id == "clear-logs":
             log.clear()
+        if event.button.id == "clear-form":
+            input_ids = [
+                "#bid-name",
+                "#bid-input-bucket",
+                "#bid-auction-id",
+                "#bid-auction-shapefile",
+                "#bid-split-id",
+                "#bid-id",
+                # "#bid-months",
+                "#bid-waterfiles",
+                "#bid-output-bucket",
+            ]
+            for id in input_ids:
+                elem = self.query_one(id, Input)
+                elem.clear()
+                elem.remove_class("error")
 
 
 def main():
