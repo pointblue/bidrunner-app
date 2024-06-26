@@ -33,3 +33,7 @@ Input.clear_animation {
 #manual-ui {
     width: 50%;
 }
+
+#data-left {width: 50%}
+#data-right {width: 50%}
+#data-upload {align: right middle;}

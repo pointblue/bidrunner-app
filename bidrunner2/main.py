@@ -1,6 +1,5 @@
 import pathlib
 import boto3
-from botocore import config
 from dotenv import load_dotenv
 import os
 import asyncio
@@ -15,14 +14,17 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Checkbox,
+    DirectoryTree,
     Input,
     Button,
     Header,
     Markdown,
+    Pretty,
     RichLog,
     Select,
     SelectionList,
     Label,
+    Static,
     TabbedContent,
     TabPane,
 )
@@ -360,6 +362,7 @@ class BidRunnerApp(App):
         load_dotenv()
         self.runner = BidRunner()
         self.runner.load_config()
+        self.selected_folder_to_upload = None
         try:
             self.runner.aws_set_credentials(
                 os.getenv("AWS_ACCESS_KEY_ID"),
@@ -469,6 +472,30 @@ class BidRunnerApp(App):
                         Button("Clear Logs", id="clear-logs", variant="error"),
                         id="log_ui",
                     ),
+                )
+            with TabPane("Data"):
+                yield Container(
+                    Label("Use this UI to upload input data"),
+                    Horizontal(
+                        Container(
+                            Static("Select Local Data Source"),
+                            DirectoryTree(os.getenv("homepath"), id="dir-tree"),
+                            id="data-left",
+                        ),
+                        Container(
+                            Pretty(
+                                self.selected_folder_to_upload,
+                                id="selected-folder-to-upload",
+                            ),
+                            Select(
+                                self.account_bucket_list,
+                                prompt="Select Destination Bucket",
+                            ),
+                            Button("Upload", id="data-upload"),
+                            id="data-right",
+                        ),
+                    ),
+                    id="data-ui",
                 )
             with TabPane("Existing Bids"):
                 yield Markdown("## Check Existing Runs")
@@ -586,8 +613,6 @@ class BidRunnerApp(App):
 
             if self.validate_inputs_and_notify():
                 self.runner.run(all_inputs)
-                if follow_logs:
-                    self.runner.check_bid_status(queue_url, bid_name, follow=True)
 
         if event.button.id == "check-task-status":
             bid_name = self.query_one("#bid-name", Input).value
@@ -613,6 +638,21 @@ class BidRunnerApp(App):
                 elem = self.query_one(id, Input)
                 elem.clear()
                 elem.remove_class("error")
+        if event.button.id == "data-upload":
+            dir_tree_elem = self.query_one("#dir-tree", DirectoryTree)
+            selected_folder_ui = self.query_one(Pretty)
+            selected_folder_ui.update(
+                f"Selected folder: {dir_tree_elem.cursor_node.data.path}"
+            )
+            log.write(f"{dir_tree_elem.cursor_node.data.path}")
+
+    @on(DirectoryTree.DirectorySelected)
+    def update_pretty_output(self):
+        dir_tree_elem = self.query_one("#dir-tree", DirectoryTree)
+        selected_folder_ui = self.query_one(Pretty)
+        selected_folder_ui.update(
+            f"Selected folder: {dir_tree_elem.cursor_node.data.path}"
+        )
 
 
 def main():
