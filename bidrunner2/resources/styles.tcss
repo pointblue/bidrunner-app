@@ -18,6 +18,11 @@
     border-title-align: left;
 }
 
+#dir-tree {
+    border: solid pink;
+    border-title-align: left;
+}
+
 .input-element {
     margin-bottom: 1;
 }

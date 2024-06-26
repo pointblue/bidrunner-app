@@ -339,11 +339,21 @@ class BidRunner:
             else:
                 self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
 
-    def aws_get_all_bucket(self):
+    def s3_get_all_buckets(self):
         s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
         all_buckets = s3_cl.list_buckets()
 
         return [(bucket["Name"], bucket["Name"]) for bucket in all_buckets["Buckets"]]
+
+    def s3_sync_to_bucket(self, source, destination):
+        s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
+        for root, dirs, files in os.walk(source):
+            for file in files:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, source)
+                s3_path = os.path.join(destination, relative_path)
+
+                self.logger.write(f"Uploading {local_path} to {destination}/{s3_path}")
 
     def __repr__(self):
         return "<BidRunner Input>"
@@ -369,7 +379,7 @@ class BidRunnerApp(App):
                 os.getenv("AWS_SECRET_ACCESS_KEY"),
                 os.getenv("AWS_SESSION_TOKEN"),
             )
-            self.account_bucket_list = self.runner.aws_get_all_bucket()
+            self.account_bucket_list = self.runner.s3_get_all_buckets()
         except Exception as e:
             raise Exception(
                 f"Unable to connect to aws using provided credentials, received the following error: {e}"
@@ -384,6 +394,9 @@ class BidRunnerApp(App):
             auto_scroll=True, highlight=True, markup=True, id="bid-run-logs", wrap=True
         )
         rl.border_title = "Run Logs"
+
+        dir_tree = DirectoryTree(os.environ.get("homepath"), id="dir-tree")
+        dir_tree.border_title = "Local Source"
 
         yield Header()
         with TabbedContent():
@@ -475,11 +488,9 @@ class BidRunnerApp(App):
                 )
             with TabPane("Data"):
                 yield Container(
-                    Label("Use this UI to upload input data"),
                     Horizontal(
                         Container(
-                            Static("Select Local Data Source"),
-                            DirectoryTree(os.getenv("homepath"), id="dir-tree"),
+                            dir_tree,
                             id="data-left",
                         ),
                         Container(
@@ -643,6 +654,9 @@ class BidRunnerApp(App):
             selected_folder_ui = self.query_one(Pretty)
             selected_folder_ui.update(
                 f"Selected folder: {dir_tree_elem.cursor_node.data.path}"
+            )
+            self.runner.s3_sync_to_bucket(
+                dir_tree_elem.cursor_node.data.path, "s3://my-bucket"
             )
             log.write(f"{dir_tree_elem.cursor_node.data.path}")
 
