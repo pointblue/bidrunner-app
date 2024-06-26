@@ -25,3 +25,11 @@
 Input.error {
     background: #ab2c2c;
 }
+
+Input.clear_animation {
+    background: #3d8762;
+}
+
+#manual-ui {
+    width: 50%;
+}

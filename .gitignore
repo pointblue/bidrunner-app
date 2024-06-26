@@ -1,3 +1,6 @@
 .venv/*
 .env
 bidrunner2.egg-info/
+config.toml
+*/__pycache__/*
+build

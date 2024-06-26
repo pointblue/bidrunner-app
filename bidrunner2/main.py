@@ -1,18 +1,26 @@
+import pathlib
 import boto3
+from botocore import config
 from dotenv import load_dotenv
 import os
 import asyncio
 from pathlib import Path
 import json
+import importlib.resources as pkg_resources
+from bidrunner2 import resources
+from datetime import datetime
+import toml
 
 from textual import on
 from textual.app import App, ComposeResult
 from textual.widgets import (
+    Checkbox,
     Input,
     Button,
     Header,
     Markdown,
     RichLog,
+    Select,
     SelectionList,
     Label,
     TabbedContent,
@@ -28,6 +36,43 @@ from textual.containers import (
 from textual.validation import Length
 
 
+# Helper Functions --------------------------------------------
+
+
+def get_resource_path(filename):
+    try:
+        with pkg_resources.path(resources, filename) as path:
+            return str(path.resolve())
+    except Exception as e:
+        print(f"Error getting path for resource {filename}: {e}")
+        return None
+
+
+def get_root_path(filename):
+    try:
+        with pkg_resources.path(".", filename) as path:
+            return str(path.resolve())
+    except Exception as e:
+        print(f"Error getting path for resource {filename}: {e}")
+        return None
+
+
+def get_resource_content(filename):
+    try:
+        return pkg_resources.read_text(resources, filename)
+    except Exception as e:
+        print(f"Error reading resource {filename}: {e}")
+        return None
+
+
+def log_with_timestamp():
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return f"[bold green][{ts}][/bold green]"
+
+
+# Bidrunner AWS ----------------------------------------
+
+
 class BidRunner:
     def __init__(self):
         self.aws_credentials_set = False
@@ -35,7 +80,20 @@ class BidRunner:
         self.runner_details = {}
         self.sqs_status = []
         self.task_status = []
-        self.aws_creds_ok = False
+        self.config = None
+
+    def load_config(self):
+        appdata_env = os.environ.get("LOCALAPPDATA")
+        if appdata_env:
+            local_appdata_path = pathlib.Path(appdata_env, "")
+            config_path = local_appdata_path / "bidrunner2" / "config.toml"
+            try:
+                with open(config_path, "r") as f:
+                    self.config = toml.load(f)
+            except FileNotFoundError:
+                raise Exception(
+                    f"config file not found at {str(config_path)}, create one or pass in custom path with --config"
+                )
 
     def set_logger(self, log: RichLog):
         self.logger = log
@@ -85,7 +143,6 @@ class BidRunner:
         try:
             s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
             _ = s3.list_buckets()
-            self.aws_creds_ok = True
             self.logger.write("Succesully performed AWS credential check")
             return True
         except Exception as e:
@@ -104,10 +161,14 @@ class BidRunner:
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
-            task_definition_revision = "8"
+            task_definition_revision = "13"
             task_definition = f"{task_definition_family}:{task_definition_revision}"
-            self.logger.write(f"running bid on cluster: {cluster_name}")
+            self.logger.write(
+                f"{log_with_timestamp()} running bid on cluster: {cluster_name}"
+            )
 
+            overwrite_command = ["Rscript", "track-message.R"]
+            overwrite_command.extend(args)
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
@@ -129,9 +190,9 @@ class BidRunner:
                     "containerOverrides": [
                         {
                             "name": "water-tracker",
-                            "command": args,
+                            "command": overwrite_command,
                             "environment": [
-                                {"name": k, "value": v}
+                                {"name": k.upper(), "value": v}
                                 for k, v in self.aws_creds.items()
                             ],
                         }
@@ -140,18 +201,20 @@ class BidRunner:
             )
 
             task_arn = resp["tasks"][0]["taskArn"]
-            last_status = resp["tasks"][0]["lastStatus"]
+            self.logger.write(
+                f"{log_with_timestamp()} created new task at: [bold green]{task_arn}[/bold green]"
+            )
+            self.logger.write(
+                f"{log_with_timestamp()} you can continue to check status by clicking [bold green]`Check Task Status`[/bold green]"
+            )
+
             self.runner_details["cluster"] = cluster_name
             self.runner_details["tasks"] = [task_arn]
 
-            self.logger.write(
-                f"Task - running on cluster: {self.runner_details['cluster']}"
-            )
-            self.logger.write(f"the value of the dict\n{self.runner_details}")
-            self.logger.write(f"Task - Arn: {self.runner_details['tasks']}")
-            self.logger.write(f"Task - Status: {last_status}")
         except Exception as e:
-            self.logger.write("An error occured trying to run the task")
+            self.logger.write(
+                f"{log_with_timestamp()} An error occured trying to run the task"
+            )
             self.logger.write(f"{e}")
 
     def get_all_running_tasks(self):
@@ -183,41 +246,89 @@ class BidRunner:
             last_status = task["lastStatus"]
             self.task_status.append(last_status)
 
-    async def check_sqs_Q(self, queue_url):
-        self.logger.write("[bold yellow]Retrieving Bid messages...[/bold yellow]")
+    def sqs_process_message(self, message):
+        msg_id = message.get("MessageId")
+        msg_receipt = message.get("ReceiptHandle")
+        msg_body = message.get("Body")
+        msg_attributes = {}
+        msg_attributes = message.get("MessageAttributes")
+
+        return {
+            "id": msg_id,
+            "receipt": msg_receipt,
+            "body": msg_body,
+            "name": list(msg_attributes.keys()),
+            "attributes": msg_attributes,
+        }
+
+    async def check_sqs_Q(self, queue_url, bid_name):
+        self.logger.write(
+            "[bold yellow]Fetching and processing SQS messages with Polling time of 20 seconds...[/bold yellow]"
+        )
         sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
+
         try:
             response = await asyncio.to_thread(
                 sqs_client.receive_message,
                 QueueUrl=queue_url,
+                AttributeNames=["All"],
+                MessageAttributeNames=["All"],
                 MaxNumberOfMessages=10,
-                WaitTimeSeconds=10,
+                WaitTimeSeconds=20,
             )
+
             messages = response.get("Messages", [])
-            if messages:
-                for message in messages:
-                    self.sqs_status.append(message.get("Body"))
-                    await asyncio.to_thread(
-                        sqs_client.delete_message,
-                        QueueUrl=queue_url,
-                        ReceiptHandle=message["ReceiptHandle"],
-                    )
+            message_processed = [self.sqs_process_message(m) for m in messages]
+            message_filtered_to_task = [
+                m for m in message_processed if m.get("name") == [bid_name]
+            ]
+            if message_processed:
+                sorted_messages = message_filtered_to_task
+
+                for message in sorted_messages:
+                    try:
+                        content = str(
+                            message.get("body")
+                        )  # Convert the entire body to a string
+                        self.sqs_status.append(
+                            f"Task name: {message.get('name')} - {content}"
+                        )
+
+                        # Delete the message from the queue
+                        try:
+                            await asyncio.to_thread(
+                                sqs_client.delete_message,
+                                QueueUrl=queue_url,
+                                ReceiptHandle=message.get("receipt"),
+                            )
+                        except Exception as delete_error:
+                            self.logger.write(
+                                f"[bold red]Error deleting message: {delete_error}[/bold red]"
+                            )
+                    except json.JSONDecodeError as e:
+                        self.logger.write(
+                            f"[bold red]Error decoding JSON: {e}. Raw message: {message.get('body')}[/bold red]"
+                        )
             else:
-                self.logger.write("[bold blue]No new messages.[/bold blue]")
+                self.logger.write("[bold blue]No new messages found.[/bold blue]")
+
         except Exception as e:
-            self.logger.write(f"[bold red]Error retrieving messages: {e}[/bold red]")
+            self.logger.write(f"[bold red]Error processing messages: {e}[/bold red]")
+
         finally:
-            self.logger.write(
-                "[bold yellow]Finished retrieving messages.[/bold yellow]"
-            )
-            for msg in self.sqs_status:
-                self.logger.write(f"[bold blue]Bid Status:[/bold blue] {msg}")
+            self.logger.write("[bold yellow]Message processing complete.[/bold yellow]")
+            self.logger.write("[bold blue]Current SQS status:[/bold blue]")
+            for idx, message in enumerate(self.sqs_status, 1):
+                self.logger.write(f"{idx}. {message}")
+
             self.sqs_status = []
 
-    async def check_bid_status(self, q_url):
-        if self.aws_creds_ok:
+    async def check_bid_status(self, q_url, bid_name, follow=False):
+        if follow:
+            pass
+        else:
             self.check_task_status()
-            await self.check_sqs_Q(q_url)
+            await self.check_sqs_Q(q_url, bid_name)
 
             if len(self.task_status) > 0:
                 self.logger.write(
@@ -225,14 +336,12 @@ class BidRunner:
                 )
             else:
                 self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
-            if len(self.sqs_status) > 0:
-                for message in self.sqs_status:
-                    self.logger.write(f"[bold blue]Bid Status:[/bold blue] {message}")
-                self.sqs_status = []
-            else:
-                self.logger.write("[bold blue]Bid - no new messages[/bold blue]")
-        else:
-            self.logger.write("Setup aws account credentials to check status.")
+
+    def aws_get_all_bucket(self):
+        s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
+        all_buckets = s3_cl.list_buckets()
+
+        return [(bucket["Name"], bucket["Name"]) for bucket in all_buckets["Buckets"]]
 
     def __repr__(self):
         return "<BidRunner Input>"
@@ -242,18 +351,29 @@ class BidRunner:
 
 
 class BidRunnerApp(App):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    CSS_PATH = os.path.join(current_dir, "resources", "styles.tcss")
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # CSS_PATH = os.path.join(current_dir, "resources", "styles.tcss")
+
+    CSS_PATH = get_resource_path("styles.tcss")
+
+    def on_load(self) -> None:
+        load_dotenv()
+        self.runner = BidRunner()
+        self.runner.load_config()
+        try:
+            self.runner.aws_set_credentials(
+                os.getenv("AWS_ACCESS_KEY_ID"),
+                os.getenv("AWS_SECRET_ACCESS_KEY"),
+                os.getenv("AWS_SESSION_TOKEN"),
+            )
+            self.account_bucket_list = self.runner.aws_get_all_bucket()
+        except Exception as e:
+            raise Exception(
+                f"Unable to connect to aws using provided credentials, received the following error: {e}"
+            )
 
     def on_mount(self) -> None:
-        load_dotenv()
         self.title = "Bidrunner2"
-        self.runner = BidRunner()
-        self.runner.aws_set_credentials(
-            os.getenv("AWS_ACCESS_KEY_ID"),
-            os.getenv("AWS_SECRET_ACCESS_KEY"),
-            os.getenv("AWS_SESSION_TOKEN"),
-        )
         self.notify("Welcome to bidrunner2!")
 
     def compose(self) -> ComposeResult:
@@ -261,6 +381,7 @@ class BidRunnerApp(App):
             auto_scroll=True, highlight=True, markup=True, id="bid-run-logs", wrap=True
         )
         rl.border_title = "Run Logs"
+
         yield Header()
         with TabbedContent():
             with TabPane("New Bid"):
@@ -271,8 +392,14 @@ class BidRunnerApp(App):
                             id="bid-name",
                             classes="input-focus input-element",
                         ),
-                        Input(
-                            placeholder="Input data bucket",
+                        # Input(
+                        #     placeholder="Input data bucket",
+                        #     id="bid-input-bucket",
+                        #     classes="input-focus input-element",
+                        # ),
+                        Select(
+                            self.account_bucket_list,
+                            prompt="Select Input Bucket",
                             id="bid-input-bucket",
                             classes="input-focus input-element",
                         ),
@@ -311,8 +438,9 @@ class BidRunnerApp(App):
                             id="bid-waterfiles",
                             classes="input-focus input-element",
                         ),
-                        Input(
-                            placeholder="Output bucket",
+                        Select(
+                            self.account_bucket_list,
+                            prompt="Select Outpu Bucket",
                             id="bid-output-bucket",
                             classes="input-focus input-element",
                         ),
@@ -323,17 +451,16 @@ class BidRunnerApp(App):
                                 variant="default",
                             ),
                             Button(
-                                "Check AWS Connection",
-                                id="submit-aws-connection-check",
-                                variant="default",
-                            ),
-                            Button(
                                 "Check Task Status",
                                 id="check-task-status",
                                 variant="default",
                             ),
                             Button("Clear Form", id="clear-form", variant="default"),
                             id="buttons-row",
+                        ),
+                        Checkbox(
+                            "Follow bid logs after submission (will block app)",
+                            id="follow-logs",
                         ),
                         id="main-ui",
                     ),
@@ -346,21 +473,23 @@ class BidRunnerApp(App):
             with TabPane("Existing Bids"):
                 yield Markdown("## Check Existing Runs")
             with TabPane("Manual"):
-                with open("bidrunner2/resources/manual.md", "r") as f:
-                    yield Markdown(f.read())
+                manual_path = get_resource_path("manual.md")
+                if manual_path:
+                    with open(manual_path, "r") as f:
+                        yield Markdown(f.read(), id="manual-ui")
 
     def validate_inputs_and_notify(self) -> bool:
         all_pass = True
         input_ids = [
             "#bid-name",
-            "#bid-input-bucket",
+            # "#bid-input-bucket",
             "#bid-auction-id",
             "#bid-auction-shapefile",
             "#bid-split-id",
             "#bid-id",
             # "#bid-months",
             "#bid-waterfiles",
-            "#bid-output-bucket",
+            # "#bid-output-bucket",
         ]
         show_notification = False
         for id in input_ids:
@@ -382,14 +511,14 @@ class BidRunnerApp(App):
     def remove_error_class(self):
         input_ids = [
             "#bid-name",
-            "#bid-input-bucket",
+            # "#bid-input-bucket",
             "#bid-auction-id",
             "#bid-auction-shapefile",
             "#bid-split-id",
             "#bid-id",
             # "#bid-months",
             "#bid-waterfiles",
-            "#bid-output-bucket",
+            # "#bid-output-bucket",
         ]
         for id in input_ids:
             elem = self.query_one(id, Input)
@@ -410,7 +539,7 @@ class BidRunnerApp(App):
             # log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
         if event.button.id == "submit_run":
             bid_name = self.query_one("#bid-name", Input).value
-            bid_input_bucket = self.query_one("#bid-input-bucket", Input).value
+            bid_input_bucket = self.query_one("#bid-input-bucket", Select).value
             bid_auction_id = self.query_one("#bid-auction-id", Input).value
             bid_auction_shapefile = self.query_one(
                 "#bid-auction-shapefile", Input
@@ -419,7 +548,9 @@ class BidRunnerApp(App):
             bid_id = self.query_one("#bid-id", Input).value
             bid_months = self.query_one("#bid-months", SelectionList).selected
             bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
-            bid_output_bucket = self.query_one("#bid-output-bucket", Input).value
+            bid_output_bucket = self.query_one("#bid-output-bucket", Select).value
+
+            follow_logs = self.query_one("#follow-logs", Checkbox).value
 
             months = [
                 "jan",
@@ -449,27 +580,34 @@ class BidRunnerApp(App):
                 bid_output_bucket,
             ]
 
-            if self.validate_inputs_and_notify():
-                self.runner.run(all_inputs)
-            # log.write(f"CLUSTER: {self.runner.runner_details.get('cluster')}")
-        if event.button.id == "check-task-status":
             queue_url = (
                 "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
             )
-            await self.runner.check_bid_status(queue_url)
+
+            if self.validate_inputs_and_notify():
+                self.runner.run(all_inputs)
+                if follow_logs:
+                    self.runner.check_bid_status(queue_url, bid_name, follow=True)
+
+        if event.button.id == "check-task-status":
+            bid_name = self.query_one("#bid-name", Input).value
+            queue_url = (
+                "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
+            )
+            await self.runner.check_bid_status(queue_url, bid_name)
         if event.button.id == "clear-logs":
             log.clear()
         if event.button.id == "clear-form":
             input_ids = [
                 "#bid-name",
-                "#bid-input-bucket",
+                # "#bid-input-bucket",
                 "#bid-auction-id",
                 "#bid-auction-shapefile",
                 "#bid-split-id",
                 "#bid-id",
                 # "#bid-months",
                 "#bid-waterfiles",
-                "#bid-output-bucket",
+                # "#bid-output-bucket",
             ]
             for id in input_ids:
                 elem = self.query_one(id, Input)
