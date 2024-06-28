@@ -96,6 +96,8 @@ class BidRunner:
                 raise Exception(
                     f"config file not found at {str(config_path)}, create one or pass in custom path with --config"
                 )
+        else:
+            print("unable to find your homepath")
 
     def set_logger(self, log: RichLog):
         self.logger = log
@@ -495,7 +497,9 @@ class BidRunnerApp(App):
                         ),
                         Container(
                             Pretty(
-                                self.selected_folder_to_upload,
+                                "Select folder for upload"
+                                if self.selected_folder_to_upload is None
+                                else self.selected_folder_to_upload,
                                 id="selected-folder-to-upload",
                             ),
                             Select(
@@ -653,7 +657,7 @@ class BidRunnerApp(App):
             dir_tree_elem = self.query_one("#dir-tree", DirectoryTree)
             selected_folder_ui = self.query_one(Pretty)
             selected_folder_ui.update(
-                f"Selected folder: {dir_tree_elem.cursor_node.data.path}"
+                f"Selected folder for Upload: {dir_tree_elem.cursor_node.data.path}"
             )
             self.runner.s3_sync_to_bucket(
                 dir_tree_elem.cursor_node.data.path, "s3://my-bucket"
@@ -663,10 +667,14 @@ class BidRunnerApp(App):
     @on(DirectoryTree.DirectorySelected)
     def update_pretty_output(self):
         dir_tree_elem = self.query_one("#dir-tree", DirectoryTree)
+        selected_folder_value = dir_tree_elem.cursor_node.data.path
         selected_folder_ui = self.query_one(Pretty)
-        selected_folder_ui.update(
-            f"Selected folder: {dir_tree_elem.cursor_node.data.path}"
+        selected_folder_to_show = (
+            f"Selected folder for upload: {selected_folder_value}"
+            if selected_folder_value
+            else "Select a folder to upload"
         )
+        selected_folder_ui.update(selected_folder_to_show)
 
 
 def main():

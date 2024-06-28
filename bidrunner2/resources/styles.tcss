@@ -19,7 +19,7 @@
 }
 
 #dir-tree {
-    border: solid pink;
+    border: solid orange;
     border-title-align: left;
 }
 
@@ -41,4 +41,5 @@ Input.clear_animation {
 
 #data-left {width: 50%}
 #data-right {width: 50%}
-#data-upload {align: right middle;}
+#data-upload {margin-left: 1; margin-top: 1;}
+#selected-folder-to-upload {margin: 1}
