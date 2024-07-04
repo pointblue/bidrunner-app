@@ -10,7 +10,7 @@ from bidrunner2 import resources
 from datetime import datetime
 import toml
 
-from textual import on
+from textual import message, on
 from textual.app import App, ComposeResult
 from textual.widgets import (
     Checkbox,
@@ -18,12 +18,12 @@ from textual.widgets import (
     Input,
     Button,
     Header,
+    Label,
     Markdown,
     Pretty,
     RichLog,
     Select,
     SelectionList,
-    Label,
     Static,
     TabbedContent,
     TabPane,
@@ -32,10 +32,8 @@ from textual.containers import (
     Container,
     Horizontal,
     HorizontalScroll,
-    Vertical,
     VerticalScroll,
 )
-from textual.validation import Length
 
 
 # Helper Functions --------------------------------------------
@@ -165,14 +163,16 @@ class BidRunner:
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
-            task_definition_revision = "13"
+            task_definition_revision = "20"
             task_definition = f"{task_definition_family}:{task_definition_revision}"
             self.logger.write(
                 f"{log_with_timestamp()} running bid on cluster: {cluster_name}"
             )
 
-            overwrite_command = ["Rscript", "track-message.R"]
+            # overwrite container commands with those from the app
+            overwrite_command = ["bash", "execute.sh"]
             overwrite_command.extend(args)
+
             ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
@@ -254,26 +254,23 @@ class BidRunner:
         msg_id = message.get("MessageId")
         msg_receipt = message.get("ReceiptHandle")
         msg_body = message.get("Body")
-        msg_attributes = {}
-        msg_attributes = message.get("MessageAttributes")
+        msg_sent_timestamp = message.get("Attributes").get("SentTimestamp")
+        msg_bid_name = (
+            message.get("MessageAttributes").get("bid_name").get("StringValue")
+        )
 
         return {
             "id": msg_id,
             "receipt": msg_receipt,
             "body": msg_body,
-            "name": list(msg_attributes.keys()),
-            "attributes": msg_attributes,
+            "timestamp": datetime.fromtimestamp(int(msg_sent_timestamp) / 1000),
+            "bid_name": msg_bid_name,
         }
 
-    async def check_sqs_Q(self, queue_url, bid_name):
-        self.logger.write(
-            "[bold yellow]Fetching and processing SQS messages with Polling time of 20 seconds...[/bold yellow]"
-        )
+    def get_latest_sqs_message(self, queue_url, bid_name):
         sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
-
         try:
-            response = await asyncio.to_thread(
-                sqs_client.receive_message,
+            resp = sqs_client.receive_message(
                 QueueUrl=queue_url,
                 AttributeNames=["All"],
                 MessageAttributeNames=["All"],
@@ -281,58 +278,108 @@ class BidRunner:
                 WaitTimeSeconds=20,
             )
 
-            messages = response.get("Messages", [])
-            message_processed = [self.sqs_process_message(m) for m in messages]
-            message_filtered_to_task = [
-                m for m in message_processed if m.get("name") == [bid_name]
+            messages = resp.get("Messages", [])
+            messages_processed = [self.sqs_process_message(m) for m in messages]
+            messages_filtered_to_task = [
+                m for m in messages_processed if m.get("bid_name") == bid_name
             ]
-            if message_processed:
-                sorted_messages = message_filtered_to_task
 
+            if messages_filtered_to_task:
+                sorted_messages = sorted(
+                    messages_filtered_to_task, key=lambda x: x["timestamp"]
+                )
                 for message in sorted_messages:
-                    try:
-                        content = str(
-                            message.get("body")
-                        )  # Convert the entire body to a string
-                        self.sqs_status.append(
-                            f"Task name: {message.get('name')} - {content}"
-                        )
+                    content = str(message.get("body"))
+                    self.sqs_status.append(
+                        f"[bold magenta]{log_with_timestamp()}[/bold magenta][bold cyan]{bid_name}[/bold cyan] - {content}"
+                    )
 
-                        # Delete the message from the queue
-                        try:
-                            await asyncio.to_thread(
-                                sqs_client.delete_message,
-                                QueueUrl=queue_url,
-                                ReceiptHandle=message.get("receipt"),
-                            )
-                        except Exception as delete_error:
-                            self.logger.write(
-                                f"[bold red]Error deleting message: {delete_error}[/bold red]"
-                            )
-                    except json.JSONDecodeError as e:
-                        self.logger.write(
-                            f"[bold red]Error decoding JSON: {e}. Raw message: {message.get('body')}[/bold red]"
-                        )
-            else:
-                self.logger.write("[bold blue]No new messages found.[/bold blue]")
-
+                    sqs_client.delete_message(
+                        QueueUrl=queue_url,
+                        ReceiptHandle=message.get("receipt"),
+                    )
         except Exception as e:
-            self.logger.write(f"[bold red]Error processing messages: {e}[/bold red]")
+            self.logger.write(f"[bold red] Error procesing messages {e}[/bold red]")
 
-        finally:
-            self.logger.write("[bold yellow]Message processing complete.[/bold yellow]")
-            self.logger.write("[bold blue]Current SQS status:[/bold blue]")
-            for idx, message in enumerate(self.sqs_status, 1):
-                self.logger.write(f"{idx}. {message}")
+    # async def check_sqs_Q(self, queue_url, bid_name):
+    #     self.logger.write(
+    #         "[bold yellow]Fetching and processing SQS messages with Polling time of 20 seconds...[/bold yellow]"
+    #     )
+    #     sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
+    #
+    #     # lets do this async
+    #     try:
+    #         response = await asyncio.to_thread(
+    #             sqs_client.receive_message,
+    #             QueueUrl=queue_url,
+    #             AttributeNames=["All"],
+    #             MessageAttributeNames=["All"],
+    #             MaxNumberOfMessages=10,
+    #             WaitTimeSeconds=20,
+    #         )
+    #
+    #         messages = response.get("Messages", [])
+    #         message_processed = [self.sqs_process_message(m) for m in messages]
+    #         self.logger.write(
+    #             f"the value of messages {message_processed}\n -----------------------------"
+    #         )
+    #         message_filtered_to_task = [
+    #             m for m in message_processed if m.get("name") == [bid_name]
+    #         ]
+    #
+    #         if message_processed:
+    #             sorted_messages = sorted(
+    #                 message_filtered_to_task, key=lambda x: x.get("timestamp")
+    #             )
+    #
+    #             for message in sorted_messages:
+    #                 try:
+    #                     content = str(
+    #                         message.get("body")
+    #                     )  # Convert the entire body to a string
+    #                     self.sqs_status.append(
+    #                         f"Task name: {message.get('name')} - {content}"
+    #                     )
+    #
+    #                     # Delete the message from the queue
+    #                     try:
+    #                         await asyncio.to_thread(
+    #                             sqs_client.delete_message,
+    #                             QueueUrl=queue_url,
+    #                             ReceiptHandle=message.get("receipt"),
+    #                         )
+    #                     except Exception as delete_error:
+    #                         self.logger.write(
+    #                             f"[bold red]Error deleting message: {delete_error}[/bold red]"
+    #                         )
+    #                 except json.JSONDecodeError as e:
+    #                     self.logger.write(
+    #                         f"[bold red]Error decoding JSON: {e}. Raw message: {message.get('body')}[/bold red]"
+    #                     )
+    #         else:
+    #             self.logger.write("[bold blue]No new messages found.[/bold blue]")
+    #
+    #     except Exception as e:
+    #         self.logger.write(f"[bold red]Error processing messages: {e}[/bold red]")
+    #
+    #     finally:
+    #         self.logger.write("[bold yellow]Message processing complete.[/bold yellow]")
+    #         self.logger.write("[bold blue]Current SQS status:[/bold blue]")
+    #         for idx, message in enumerate(self.sqs_status, 1):
+    #             self.logger.write(f"{idx}. {message}")
+    #
+    #         self.sqs_status = []
+    #
 
-            self.sqs_status = []
-
-    async def check_bid_status(self, q_url, bid_name, follow=False):
+    def check_bid_status(self, q_url, bid_name, follow=False):
         if follow:
             pass
         else:
+            self.logger.write(
+                "[bold orange]Retrieving latest messages from Queue...[/bold orange]"
+            )
             self.check_task_status()
-            await self.check_sqs_Q(q_url, bid_name)
+            self.get_latest_sqs_message(q_url, bid_name)
 
             if len(self.task_status) > 0:
                 self.logger.write(
@@ -341,12 +388,22 @@ class BidRunner:
             else:
                 self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
 
-    def s3_get_all_buckets(self):
+    def s3_get_all_buckets(self, s3_root):
         s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
-        all_buckets = s3_cl.list_buckets()
+        paginator = s3_cl.get_paginator("list_objects_v2")
+        folders = []
 
-        return [(bucket["Name"], bucket["Name"]) for bucket in all_buckets["Buckets"]]
+        for page in paginator.paginate(Bucket=s3_root, Delimiter="/"):
+            for prefix in page.get("CommonPrefixes", []):
+                folders.append(prefix["Prefix"])
 
+        return [(f, f) for f in folders]
+
+    def efs_get_all_folders(self):
+        all_folders = os.listdir("/mnt/efs")
+        return [(f, f) for f in all_folders]
+
+    # TODO: maybe remove this? I think we should just instruct users to use the aws cli
     def s3_sync_to_bucket(self, source, destination):
         s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
         for root, dirs, files in os.walk(source):
@@ -375,13 +432,14 @@ class BidRunnerApp(App):
         self.runner = BidRunner()
         self.runner.load_config()
         self.selected_folder_to_upload = None
+        s3_input_root = self.runner.config["app"]["s3_input_root"]
         try:
             self.runner.aws_set_credentials(
                 os.getenv("AWS_ACCESS_KEY_ID"),
                 os.getenv("AWS_SECRET_ACCESS_KEY"),
                 os.getenv("AWS_SESSION_TOKEN"),
             )
-            self.account_bucket_list = self.runner.s3_get_all_buckets()
+            self.account_bucket_list = self.runner.s3_get_all_buckets(s3_input_root)
         except Exception as e:
             raise Exception(
                 f"Unable to connect to aws using provided credentials, received the following error: {e}"
@@ -507,6 +565,7 @@ class BidRunnerApp(App):
                                 prompt="Select Destination Bucket",
                             ),
                             Button("Upload", id="data-upload"),
+                            RichLog(id="aws-cli-command", markup=True, max_lines=3),
                             id="data-right",
                         ),
                     ),
@@ -568,7 +627,7 @@ class BidRunnerApp(App):
                 elem.remove_class("error")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        log = self.query_one(RichLog)
+        log = self.query_one("#bid-run-logs", RichLog)
         self.runner.set_logger(log)
         if event.button.id == "submit-aws-connection-check":
             creds_ok = self.runner.aws_check_credentials()
@@ -634,7 +693,10 @@ class BidRunnerApp(App):
             queue_url = (
                 "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
             )
-            await self.runner.check_bid_status(queue_url, bid_name)
+            log.write("[bold orange]Retrieving message from SQS Queue[/bold orange]")
+            self.runner.check_bid_status(queue_url, bid_name)
+            for msg in self.runner.sqs_status:
+                log.write(f"[bold green]{msg}[/bold green]")
         if event.button.id == "clear-logs":
             log.clear()
         if event.button.id == "clear-form":
@@ -655,14 +717,19 @@ class BidRunnerApp(App):
                 elem.remove_class("error")
         if event.button.id == "data-upload":
             dir_tree_elem = self.query_one("#dir-tree", DirectoryTree)
+            aws_cli_ui = self.query_one("#aws-cli-command", RichLog)
             selected_folder_ui = self.query_one(Pretty)
             selected_folder_ui.update(
                 f"Selected folder for Upload: {dir_tree_elem.cursor_node.data.path}"
             )
-            self.runner.s3_sync_to_bucket(
-                dir_tree_elem.cursor_node.data.path, "s3://my-bucket"
+
+            selected_dir = dir_tree_elem.cursor_node.data.path
+            selected_dir = str(selected_dir)
+            selected_dir = selected_dir.replace("\\", "/")
+
+            aws_cli_ui.write(
+                f"Run the following on a terminal to copy data to S3, wait for it finish and return to new bid to select it:\n\n[bold #AAAAAA on #162138]aws s3 sync {selected_dir} s3://destination[/bold #AAAAAA on #162138]"
             )
-            log.write(f"{dir_tree_elem.cursor_node.data.path}")
 
     @on(DirectoryTree.DirectorySelected)
     def update_pretty_output(self):

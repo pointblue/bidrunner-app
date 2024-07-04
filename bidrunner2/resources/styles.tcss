@@ -7,7 +7,6 @@
 #log_ui {margin: 1; width: 60%}
 
 #submit-aws-connection-check {margin-left: 1; margin-right:1;}
-#buttons-row {margin-left: 1;}
 
 .input-focus:focus {
     background: #273257 20%;
@@ -43,3 +42,10 @@ Input.clear_animation {
 #data-right {width: 50%}
 #data-upload {margin-left: 1; margin-top: 1;}
 #selected-folder-to-upload {margin: 1}
+#aws-cli-command {margin: 2;}
+
+Button {
+    margin-right: 1;
+}
+
+
