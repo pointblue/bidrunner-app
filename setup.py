@@ -13,6 +13,7 @@ setup(
         "python-dotenv",
         "rich",
         "textual",
+        "toml",
     ],
     entry_points={
         "console_scripts": [
