@@ -302,75 +302,6 @@ class BidRunner:
         except Exception as e:
             self.logger.write(f"[bold red] Error procesing messages {e}[/bold red]")
 
-    # async def check_sqs_Q(self, queue_url, bid_name):
-    #     self.logger.write(
-    #         "[bold yellow]Fetching and processing SQS messages with Polling time of 20 seconds...[/bold yellow]"
-    #     )
-    #     sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
-    #
-    #     # lets do this async
-    #     try:
-    #         response = await asyncio.to_thread(
-    #             sqs_client.receive_message,
-    #             QueueUrl=queue_url,
-    #             AttributeNames=["All"],
-    #             MessageAttributeNames=["All"],
-    #             MaxNumberOfMessages=10,
-    #             WaitTimeSeconds=20,
-    #         )
-    #
-    #         messages = response.get("Messages", [])
-    #         message_processed = [self.sqs_process_message(m) for m in messages]
-    #         self.logger.write(
-    #             f"the value of messages {message_processed}\n -----------------------------"
-    #         )
-    #         message_filtered_to_task = [
-    #             m for m in message_processed if m.get("name") == [bid_name]
-    #         ]
-    #
-    #         if message_processed:
-    #             sorted_messages = sorted(
-    #                 message_filtered_to_task, key=lambda x: x.get("timestamp")
-    #             )
-    #
-    #             for message in sorted_messages:
-    #                 try:
-    #                     content = str(
-    #                         message.get("body")
-    #                     )  # Convert the entire body to a string
-    #                     self.sqs_status.append(
-    #                         f"Task name: {message.get('name')} - {content}"
-    #                     )
-    #
-    #                     # Delete the message from the queue
-    #                     try:
-    #                         await asyncio.to_thread(
-    #                             sqs_client.delete_message,
-    #                             QueueUrl=queue_url,
-    #                             ReceiptHandle=message.get("receipt"),
-    #                         )
-    #                     except Exception as delete_error:
-    #                         self.logger.write(
-    #                             f"[bold red]Error deleting message: {delete_error}[/bold red]"
-    #                         )
-    #                 except json.JSONDecodeError as e:
-    #                     self.logger.write(
-    #                         f"[bold red]Error decoding JSON: {e}. Raw message: {message.get('body')}[/bold red]"
-    #                     )
-    #         else:
-    #             self.logger.write("[bold blue]No new messages found.[/bold blue]")
-    #
-    #     except Exception as e:
-    #         self.logger.write(f"[bold red]Error processing messages: {e}[/bold red]")
-    #
-    #     finally:
-    #         self.logger.write("[bold yellow]Message processing complete.[/bold yellow]")
-    #         self.logger.write("[bold blue]Current SQS status:[/bold blue]")
-    #         for idx, message in enumerate(self.sqs_status, 1):
-    #             self.logger.write(f"{idx}. {message}")
-    #
-    #         self.sqs_status = []
-    #
 
     def check_bid_status(self, q_url, bid_name, follow=False):
         if follow:
@@ -474,11 +405,6 @@ class BidRunnerApp(App):
                             id="bid-name",
                             classes="input-focus input-element",
                         ),
-                        # Input(
-                        #     placeholder="Input data bucket",
-                        #     id="bid-input-bucket",
-                        #     classes="input-focus input-element",
-                        # ),
                         Select(
                             self.account_bucket_list,
                             prompt="Select Input Bucket",
@@ -493,31 +419,6 @@ class BidRunnerApp(App):
                         Input(
                             placeholder="Auction shapefile",
                             id="bid-auction-shapefile",
-                            classes="input-focus input-element",
-                        ),
-                        Input(
-                            placeholder="enter bid split id",
-                            id="bid-split-id",
-                            classes="input-focus input-element",
-                        ),
-                        Input(
-                            placeholder="enter bid id",
-                            id="bid-id",
-                            classes="input-focus input-element",
-                        ),
-                        SelectionList[int](
-                            ("January", 0, True),
-                            ("February", 1),
-                            ("March", 2),
-                            ("April", 3),
-                            ("May", 4),
-                            ("June", 5),
-                            id="bid-months",
-                            classes="input-focus input-element",
-                        ),
-                        Input(
-                            placeholder="Waterfiles",
-                            id="bid-waterfiles",
                             classes="input-focus input-element",
                         ),
                         Select(
@@ -577,8 +478,6 @@ class BidRunnerApp(App):
                     ),
                     id="data-ui",
                 )
-            with TabPane("Existing Bids"):
-                yield Markdown("## Check Existing Runs")
             with TabPane("Manual"):
                 manual_path = get_resource_path("manual.md")
                 if manual_path:
@@ -592,10 +491,6 @@ class BidRunnerApp(App):
             # "#bid-input-bucket",
             "#bid-auction-id",
             "#bid-auction-shapefile",
-            "#bid-split-id",
-            "#bid-id",
-            # "#bid-months",
-            "#bid-waterfiles",
             # "#bid-output-bucket",
         ]
         show_notification = False
@@ -621,9 +516,6 @@ class BidRunnerApp(App):
             # "#bid-input-bucket",
             "#bid-auction-id",
             "#bid-auction-shapefile",
-            "#bid-split-id",
-            "#bid-id",
-            # "#bid-months",
             "#bid-waterfiles",
             # "#bid-output-bucket",
         ]
@@ -651,39 +543,15 @@ class BidRunnerApp(App):
             bid_auction_shapefile = self.query_one(
                 "#bid-auction-shapefile", Input
             ).value
-            bid_split_id = self.query_one("#bid-split-id", Input).value
-            bid_id = self.query_one("#bid-id", Input).value
-            bid_months = self.query_one("#bid-months", SelectionList).selected
-            bid_waterfiles = self.query_one("#bid-waterfiles", Input).value
             bid_output_bucket = self.query_one("#bid-output-bucket", Select).value
 
             follow_logs = self.query_one("#follow-logs", Checkbox).value
-
-            months = [
-                "jan",
-                "feb",
-                "mar",
-                "apr",
-                "may",
-                "jun",
-                "jul",
-                "aug",
-                "sep",
-                "oct",
-                "nov",
-                "dec",
-            ]
-            selected_months = [months[i] for i in bid_months]
 
             all_inputs = [
                 bid_name,
                 bid_input_bucket,
                 bid_auction_id,
                 bid_auction_shapefile,
-                bid_split_id,
-                bid_id,
-                ",".join(selected_months),
-                bid_waterfiles,
                 bid_output_bucket,
             ]
 
@@ -711,10 +579,6 @@ class BidRunnerApp(App):
                 # "#bid-input-bucket",
                 "#bid-auction-id",
                 "#bid-auction-shapefile",
-                "#bid-split-id",
-                "#bid-id",
-                # "#bid-months",
-                "#bid-waterfiles",
                 # "#bid-output-bucket",
             ]
             for id in input_ids:
