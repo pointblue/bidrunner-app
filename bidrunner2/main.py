@@ -9,6 +9,7 @@ import importlib.resources as pkg_resources
 from bidrunner2 import resources
 from datetime import datetime
 import toml
+import platform
 
 from textual import message, on
 from textual.app import App, ComposeResult
@@ -83,19 +84,19 @@ class BidRunner:
         self.config = None
 
     def load_config(self):
-        appdata_env = os.environ.get("LOCALAPPDATA")
-        if appdata_env:
-            local_appdata_path = pathlib.Path(appdata_env, "")
-            config_path = local_appdata_path / "bidrunner2" / "config.toml"
-            try:
-                with open(config_path, "r") as f:
-                    self.config = toml.load(f)
-            except FileNotFoundError:
-                raise Exception(
-                    f"config file not found at {str(config_path)}, create one or pass in custom path with --config"
-                )
-        else:
-            print("unable to find your homepath")
+        if platform.system() == "Windows":
+            appdata_env = os.environ.get("LOCALAPPDATA")
+        elif platform.system() == "Linux":
+            appdata_env = f'{os.environ.get("HOME")}/.config'
+        local_appdata_path = pathlib.Path(appdata_env, "")
+        config_path = local_appdata_path / "bidrunner2" / "config.toml"
+        try:
+            with open(config_path, "r") as f:
+                self.config = toml.load(f)
+        except FileNotFoundError as e:
+            raise Exception (
+                str(e)
+            )
 
     def set_logger(self, log: RichLog):
         self.logger = log
@@ -435,9 +436,9 @@ class BidRunnerApp(App):
         s3_input_root = self.runner.config["app"]["s3_input_root"]
         try:
             self.runner.aws_set_credentials(
-                os.getenv("AWS_ACCESS_KEY_ID"),
-                os.getenv("AWS_SECRET_ACCESS_KEY"),
-                os.getenv("AWS_SESSION_TOKEN"),
+                self.runner.config["aws"]["aws_access_key_id"] or os.getenv("AWS_ACCESS_KEY_ID"),
+                self.runner.config["aws"]["aws_secret_access_key"] or os.getenv("AWS_SECRET_ACCESS_KEY"),
+                self.runner.config["aws"]["aws_session_token"] or os.getenv("AWS_SESSION_TOKEN"),
             )
             self.account_bucket_list = self.runner.s3_get_all_buckets(s3_input_root)
         except Exception as e:
@@ -454,8 +455,13 @@ class BidRunnerApp(App):
             auto_scroll=True, highlight=True, markup=True, id="bid-run-logs", wrap=True
         )
         rl.border_title = "Run Logs"
+        
+        if platform.system() == "Windows": 
+            home_path_for_tree = os.environ.get("homepath")
+        elif platform.system() == "Linux":
+            home_path_for_tree = "~"
 
-        dir_tree = DirectoryTree(os.environ.get("homepath"), id="dir-tree")
+        dir_tree = DirectoryTree(home_path_for_tree, id="dir-tree")
         dir_tree.border_title = "Local Source"
 
         yield Header()
