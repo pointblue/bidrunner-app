@@ -94,9 +94,7 @@ class BidRunner:
             with open(config_path, "r") as f:
                 self.config = toml.load(f)
         except FileNotFoundError as e:
-            raise Exception (
-                str(e)
-            )
+            raise Exception(str(e))
 
     def set_logger(self, log: RichLog):
         self.logger = log
@@ -302,23 +300,19 @@ class BidRunner:
         except Exception as e:
             self.logger.write(f"[bold red] Error procesing messages {e}[/bold red]")
 
+    def check_bid_status(self, q_url, bid_name):
+        self.logger.write(
+            "[bold orange]Retrieving latest messages from Queue...[/bold orange]"
+        )
+        self.check_task_status()
+        self.get_latest_sqs_message(q_url, bid_name)
 
-    def check_bid_status(self, q_url, bid_name, follow=False):
-        if follow:
-            pass
-        else:
+        if len(self.task_status) > 0:
             self.logger.write(
-                "[bold orange]Retrieving latest messages from Queue...[/bold orange]"
+                f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
             )
-            self.check_task_status()
-            self.get_latest_sqs_message(q_url, bid_name)
-
-            if len(self.task_status) > 0:
-                self.logger.write(
-                    f"[bold magenta]Task - status:[/bold magenta] {self.task_status.pop()}"
-                )
-            else:
-                self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
+        else:
+            self.logger.write("[bold magenta]Task - no new messages[/bold magenta]")
 
     def s3_get_all_buckets(self, s3_root):
         s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
@@ -365,13 +359,22 @@ class BidRunnerApp(App):
         self.runner.load_config()
         self.selected_folder_to_upload = None
         s3_input_root = self.runner.config["app"]["s3_input_root"]
+        s3_output_root = self.runner.config["app"]["s3_output_root"]
         try:
             self.runner.aws_set_credentials(
-                self.runner.config["aws"]["aws_access_key_id"] or os.getenv("AWS_ACCESS_KEY_ID"),
-                self.runner.config["aws"]["aws_secret_access_key"] or os.getenv("AWS_SECRET_ACCESS_KEY"),
-                self.runner.config["aws"]["aws_session_token"] or os.getenv("AWS_SESSION_TOKEN"),
+                self.runner.config["aws"]["aws_access_key_id"]
+                or os.getenv("AWS_ACCESS_KEY_ID"),
+                self.runner.config["aws"]["aws_secret_access_key"]
+                or os.getenv("AWS_SECRET_ACCESS_KEY"),
+                self.runner.config["aws"]["aws_session_token"]
+                or os.getenv("AWS_SESSION_TOKEN"),
             )
-            self.account_bucket_list = self.runner.s3_get_all_buckets(s3_input_root)
+            self.account_input_bucket_list = self.runner.s3_get_all_buckets(
+                s3_input_root
+            )
+            self.account_output_bucket_list = self.runner.s3_get_all_buckets(
+                s3_output_root
+            )
         except Exception as e:
             raise Exception(
                 f"Unable to connect to aws using provided credentials, received the following error: {e}"
@@ -386,8 +389,8 @@ class BidRunnerApp(App):
             auto_scroll=True, highlight=True, markup=True, id="bid-run-logs", wrap=True
         )
         rl.border_title = "Run Logs"
-        
-        if platform.system() == "Windows": 
+
+        if platform.system() == "Windows":
             home_path_for_tree = os.environ.get("homepath")
         elif platform.system() == "Linux":
             home_path_for_tree = "~"
@@ -406,24 +409,24 @@ class BidRunnerApp(App):
                             classes="input-focus input-element",
                         ),
                         Select(
-                            self.account_bucket_list,
-                            prompt="Select Input Bucket",
+                            self.account_input_bucket_list,
+                            prompt="Select Input Bucket/Auction ID",
                             id="bid-input-bucket",
                             classes="input-focus input-element",
                         ),
-                        Input(
-                            placeholder="Auction Id",
-                            id="bid-auction-id",
-                            classes="input-focus input-element",
-                        ),
+                        # Input(
+                        #     placeholder="Auction Id",
+                        #     id="bid-auction-id",
+                        #     classes="input-focus input-element",
+                        # ),
                         Input(
                             placeholder="Auction shapefile",
                             id="bid-auction-shapefile",
                             classes="input-focus input-element",
                         ),
                         Select(
-                            self.account_bucket_list,
-                            prompt="Select Outpu Bucket",
+                            self.account_output_bucket_list,
+                            prompt="Select Output Bucket",
                             id="bid-output-bucket",
                             classes="input-focus input-element",
                         ),
@@ -440,10 +443,6 @@ class BidRunnerApp(App):
                             ),
                             Button("Clear Form", id="clear-form", variant="default"),
                             id="buttons-row",
-                        ),
-                        Checkbox(
-                            "Follow bid logs after submission (will block app)",
-                            id="follow-logs",
                         ),
                         id="main-ui",
                     ),
@@ -468,7 +467,7 @@ class BidRunnerApp(App):
                                 id="selected-folder-to-upload",
                             ),
                             Select(
-                                self.account_bucket_list,
+                                self.account_input_bucket_list,
                                 prompt="Select Destination Bucket",
                             ),
                             Button("Upload", id="data-upload"),
@@ -488,14 +487,17 @@ class BidRunnerApp(App):
         all_pass = True
         input_ids = [
             "#bid-name",
-            # "#bid-input-bucket",
-            "#bid-auction-id",
+            "#bid-input-bucket",
+            # "#bid-auction-id",
             "#bid-auction-shapefile",
-            # "#bid-output-bucket",
+            "#bid-output-bucket",
         ]
         show_notification = False
         for id in input_ids:
-            widget_element = self.query_one(id, Input)
+            if "bucket" in id:
+                widget_element = self.query_one(id, Select)
+            else:
+                widget_element = self.query_one(id, Input)
             if not widget_element.value:
                 show_notification = True
                 all_pass = False
@@ -513,14 +515,16 @@ class BidRunnerApp(App):
     def remove_error_class(self):
         input_ids = [
             "#bid-name",
-            # "#bid-input-bucket",
-            "#bid-auction-id",
+            "#bid-input-bucket",
+            # "#bid-auction-id",
             "#bid-auction-shapefile",
-            "#bid-waterfiles",
-            # "#bid-output-bucket",
+            "#bid-output-bucket",
         ]
         for id in input_ids:
-            elem = self.query_one(id, Input)
+            if "bucket" in id:
+                elem = self.query_one(id, Select)
+            else:
+                elem = self.query_one(id, Input)
             if elem.value:
                 elem.remove_class("error")
 
@@ -535,22 +539,20 @@ class BidRunnerApp(App):
                 title="AWS Credential Check",
                 severity=notify_severity,
             )
-            # log.write(f"Connected to aws? {'Yes' if creds_ok else 'No'}")
+
         if event.button.id == "submit_run":
             bid_name = self.query_one("#bid-name", Input).value
             bid_input_bucket = self.query_one("#bid-input-bucket", Select).value
-            bid_auction_id = self.query_one("#bid-auction-id", Input).value
+            # bid_auction_id = self.query_one("#bid-auction-id", Input).value
             bid_auction_shapefile = self.query_one(
                 "#bid-auction-shapefile", Input
             ).value
             bid_output_bucket = self.query_one("#bid-output-bucket", Select).value
 
-            follow_logs = self.query_one("#follow-logs", Checkbox).value
-
             all_inputs = [
                 bid_name,
                 bid_input_bucket,
-                bid_auction_id,
+                # bid_auction_id,
                 bid_auction_shapefile,
                 bid_output_bucket,
             ]
@@ -576,10 +578,10 @@ class BidRunnerApp(App):
         if event.button.id == "clear-form":
             input_ids = [
                 "#bid-name",
-                # "#bid-input-bucket",
-                "#bid-auction-id",
+                "#bid-input-bucket",
+                # "#bid-auction-id",
                 "#bid-auction-shapefile",
-                # "#bid-output-bucket",
+                "#bid-output-bucket",
             ]
             for id in input_ids:
                 elem = self.query_one(id, Input)
