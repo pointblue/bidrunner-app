@@ -12,7 +12,8 @@ pipx install git+https://github.com/FlowWest/bidrunner2.git --force
 
 This will install an executable that can be spawned by running `bidunner2.exe` from the commmand line.
 
-A config file is required to run. On Windows this file is expected to be in `%LOCALAPPDATA%/bidrunner2/config.toml` and on unix systems in `~/.config/bidrunner2/config.toml`. Replace values with yourown:
+A config file is required to run. On Windows this file is expected to be in `%LOCALAPPDATA%/bidrunner2/config.toml` and on unix systems in `~/.config/bidrunner2/config.toml`. Replace values with your
+own:
 
 
 ```toml
