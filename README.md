@@ -18,7 +18,9 @@ own:
 
 ```toml
 [app]
+# the bucket where all the data inputs are stored, this should be full of "auction_id" folders
 s3_input_root = "bid-runner-input-2024"
+# the bucket where outputs are to be saved, bidrunner will create new folders within this bucket to store run ouputs
 s3_output_root = "bid-runner-output-2024"
 
 [aws]
