@@ -2,8 +2,6 @@ import pathlib
 import boto3
 from dotenv import load_dotenv
 import os
-import asyncio
-from pathlib import Path
 import json
 import importlib.resources as pkg_resources
 from bidrunner2 import resources
@@ -14,18 +12,14 @@ import platform
 from textual import message, on
 from textual.app import App, ComposeResult
 from textual.widgets import (
-    Checkbox,
     DirectoryTree,
     Input,
     Button,
     Header,
-    Label,
     Markdown,
     Pretty,
     RichLog,
     Select,
-    SelectionList,
-    Static,
     TabbedContent,
     TabPane,
 )
@@ -162,7 +156,7 @@ class BidRunner:
         try:
             cluster_name = "WaterTrackerDevCluster"
             task_definition_family = "water-tracker-model-runs"
-            task_definition_revision = "20"
+            task_definition_revision = "23"
             task_definition = f"{task_definition_family}:{task_definition_revision}"
             self.logger.write(
                 f"{log_with_timestamp()} running bid on cluster: {cluster_name}"
@@ -178,6 +172,7 @@ class BidRunner:
                 taskDefinition=task_definition,
                 count=1,
                 launchType="FARGATE",
+                # TODO: needs to changed when transfering ownership
                 networkConfiguration={
                     "awsvpcConfiguration": {
                         "subnets": [
@@ -185,7 +180,7 @@ class BidRunner:
                             "subnet-0f8ae878792f9ba53",
                             "subnet-0be2ea73766e5a51a",
                             "subnet-03d9c808462943df1",
-                        ],  # Replace with your subnet ID
+                        ],
                         "assignPublicIp": "ENABLED",
                     }
                 },
@@ -531,14 +526,7 @@ class BidRunnerApp(App):
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         log = self.query_one("#bid-run-logs", RichLog)
         self.runner.set_logger(log)
-        if event.button.id == "submit-aws-connection-check":
-            creds_ok = self.runner.aws_check_credentials()
-            notify_severity = "information" if creds_ok else "error"
-            self.notify(
-                f"{'Your credentials look good!' if creds_ok else 'Ooop! Your credentials are not valid, check logs for details'}",
-                title="AWS Credential Check",
-                severity=notify_severity,
-            )
+        queue_url = self.runner.config["aws"]["queue_url"]
 
         if event.button.id == "submit_run":
             bid_name = self.query_one("#bid-name", Input).value
@@ -551,24 +539,16 @@ class BidRunnerApp(App):
 
             all_inputs = [
                 bid_name,
-                bid_input_bucket,
-                # bid_auction_id,
+                bid_input_bucket,  # this is auction id
                 bid_auction_shapefile,
                 bid_output_bucket,
             ]
-
-            queue_url = (
-                "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
-            )
 
             if self.validate_inputs_and_notify():
                 self.runner.run(all_inputs)
 
         if event.button.id == "check-task-status":
             bid_name = self.query_one("#bid-name", Input).value
-            queue_url = (
-                "https://sqs.us-west-2.amazonaws.com/975050180415/water-tracker-Q"
-            )
             log.write("[bold orange]Retrieving message from SQS Queue[/bold orange]")
             self.runner.check_bid_status(queue_url, bid_name)
             for msg in self.runner.sqs_status:

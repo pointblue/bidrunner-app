@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bidrunner2"
+version = "0.1.0"
+dependencies = [
+   "boto3",
+   "python-dotenv",
+   "rich", 
+   "textual",
+   "toml",
+]
+
+[project.scripts]
+bidrunner2 = "bidrunner2.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bidrunner2"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+   "src/bidrunner2/resources/*",
+]
