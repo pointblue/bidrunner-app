@@ -127,11 +127,12 @@ class BidRunner:
             "count": 1,
         }
 
-    def aws_set_credentials(self, access_key, secret_key, session_token):
+    def aws_set_credentials(self, access_key, secret_key, session_token=None):
         self.aws_creds = {}
         self.aws_creds["aws_access_key_id"] = access_key
         self.aws_creds["aws_secret_access_key"] = secret_key
-        self.aws_creds["aws_session_token"] = session_token
+        if session_token:
+            self.aws_creds["aws_session_token"] = session_token
 
     def aws_check_credentials(self):
         self.logger.write("[bold green]AWS Credentials Check: =================")
@@ -361,8 +362,7 @@ class BidRunnerApp(App):
                 or os.getenv("AWS_ACCESS_KEY_ID"),
                 self.runner.config["aws"]["aws_secret_access_key"]
                 or os.getenv("AWS_SECRET_ACCESS_KEY"),
-                self.runner.config["aws"]["aws_session_token"]
-                or os.getenv("AWS_SESSION_TOKEN"),
+                None,
             )
             self.account_input_bucket_list = self.runner.s3_get_all_buckets(
                 s3_input_root
