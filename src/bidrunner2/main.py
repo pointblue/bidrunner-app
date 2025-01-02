@@ -220,7 +220,7 @@ class BidRunner:
                 f"invalid values for tasks and cluster, these are tasks={self.runner_details.get('tasks')} and cluster={self.runner_details.get('cluster')}"
             )
         else:
-            cl = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            cl = boto3.client("ecs", region_name="us-east-2", **self.aws_creds)
             res = cl.describe_tasks(**self.runner_details)
             task = res["tasks"][0]
             last_status = task["lastStatus"]
@@ -244,7 +244,7 @@ class BidRunner:
         }
 
     def get_latest_sqs_message(self, queue_url, bid_name):
-        sqs_client = boto3.client("sqs", region_name="us-west-2", **self.aws_creds)
+        sqs_client = boto3.client("sqs", region_name="us-east-2", **self.aws_creds)
         try:
             resp = sqs_client.receive_message(
                 QueueUrl=queue_url,
