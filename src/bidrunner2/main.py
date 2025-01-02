@@ -1,3 +1,4 @@
+from collections import defaultdict
 import pathlib
 import boto3
 from dotenv import load_dotenv
@@ -8,6 +9,7 @@ from bidrunner2 import resources
 from datetime import datetime
 import toml
 import platform
+import sys
 
 from textual import message, on
 from textual.app import App, ComposeResult
@@ -65,6 +67,23 @@ def log_with_timestamp():
     return f"[bold green][{ts}][/bold green]"
 
 
+def create_config_file(config_dir: pathlib.Path, config_file: str):
+    # create bidrunner folder if not exists
+    print("isnide the config file creation function")
+    config_dir.mkdir(parents=True, exist_ok=True)
+    default_config = {
+        "app": {"s3_input_root": "", "s3_output_root": ""},
+        "aws": {"aws_access_key_id": "", "aws_secret_access_key": "", "queue_url": ""},
+    }
+
+    config_file_path = config_dir / config_file
+
+    print(f"creating the file: {config_file_path}")
+
+    with open(config_file_path, "w") as f:
+        toml.dump(default_config, f)
+
+
 # Bidrunner AWS ----------------------------------------
 
 
@@ -76,56 +95,46 @@ class BidRunner:
         self.sqs_status = []
         self.task_status = []
         self.config = None
+        self.config_path = None
 
     def load_config(self):
+        """
+        Load users config file. If one does not exist, then create a blank version with instructions
+        to user on how access and update it.
+
+        On linux this config file should be under $USER/.config/bidrunner2/config.toml and on windows this
+        should be %LOCALAPPDATA%/bidrunner2/config.toml
+        """
         if platform.system() == "Windows":
             appdata_env = os.environ.get("LOCALAPPDATA")
         elif platform.system() == "Linux":
             appdata_env = f'{os.environ.get("HOME")}/.config'
         local_appdata_path = pathlib.Path(appdata_env, "")
-        config_path = local_appdata_path / "bidrunner2" / "config.toml"
+        config_path = local_appdata_path / "bidrunner2"
+        config_file = config_path / "config.toml"
         try:
-            with open(config_path, "r") as f:
+            with open(config_file, "r") as f:
+                self.config_path = config_file
                 self.config = toml.load(f)
         except FileNotFoundError as e:
-            raise Exception(str(e))
+            create_config_file(config_path, "config.toml")
+            with open(config_file, "r") as f:
+                self.config_path = config_file
+                self.config = toml.load(f)
+            raise Exception(
+                f"""found incomplete config file, insert appropriate values to continue, use the following:\n 
+                Windows: notepad {self.config_path}\n
+                Linux: vim {self.config_path}
+                """
+            )
+        except Exception as e:
+            raise Exception(f"ERROR {e}")
 
     def set_logger(self, log: RichLog):
+        """
+        Create a RichLog logger for the app
+        """
         self.logger = log
-
-    def _parse_base_ecs_definition(self):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        json_path = os.path.join(current_dir, "resources", "ecs-def.json")
-        with open(json_path) as f:
-            ecs_def = json.load(f)
-        return ecs_def
-
-    def create_task_definition(self, args):
-        ecs_def = self._parse_base_ecs_definition()
-        ecs_def.get("containerDefinitions")[0]["environment"] = [
-            {"name": k, "value": v} for k, v in self.aws_creds.items()
-        ]
-        ecs_def.get("containerDefinitions")[0]["commands"] = args
-        return ecs_def
-
-    def overwrite_task_definitions(self, cluster_name, task_name, args):
-        return {
-            "cluster": cluster_name,
-            "taskDefinition": task_name,
-            "launchType": "FARGATE",  # or 'FARGATE' if using Fargate
-            "overrides": {
-                "containerOverrides": [
-                    {
-                        "name": "water-tracker",
-                        "command": args,
-                        "environment": [
-                            {"name": k, "value": v} for k, v in self.aws_creds.items()
-                        ],
-                    },
-                ],
-            },
-            "count": 1,
-        }
 
     def aws_set_credentials(self, access_key, secret_key, session_token=None):
         self.aws_creds = {}
@@ -134,30 +143,14 @@ class BidRunner:
         if session_token:
             self.aws_creds["aws_session_token"] = session_token
 
-    def aws_check_credentials(self):
-        self.logger.write("[bold green]AWS Credentials Check: =================")
-        try:
-            s3 = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
-            _ = s3.list_buckets()
-            self.logger.write("Succesully performed AWS credential check")
-            return True
-        except Exception as e:
-            self.logger.write(
-                "Unable to connect to aws. The following error was received:"
-            )
-            self.logger.write(f"[bold magenta]{e}")
-            self.logger.write(
-                "Your aws credentials should be set in an [bold green]`.env`[/bold green] file in the same directory where this app is being run. Consult the manual for details on the format of this file."
-            )
-            return False
-        finally:
-            self.logger.write("[bold green]=================")
-
     def run(self, args):
         try:
-            cluster_name = "WaterTrackerDevCluster"
-            task_definition_family = "water-tracker-model-runs"
-            task_definition_revision = "23"
+            # NOTE: Change to reflect cluster name set by AWS Admin, consider adding to config file
+            cluster_name = "water-tracker-cluster"
+            # NOTE: Change to reflect task definition family set by AWS Admin, consider adding to config file
+            task_definition_family = "water-tracker-bid-runs"  # water-tracker-bid-runs
+            # NOTE: Change to reflect revision set by AWS Admin, consider adding to config file
+            task_definition_revision = "1"
             task_definition = f"{task_definition_family}:{task_definition_revision}"
             self.logger.write(
                 f"{log_with_timestamp()} running bid on cluster: {cluster_name}"
@@ -167,7 +160,7 @@ class BidRunner:
             overwrite_command = ["bash", "execute.sh"]
             overwrite_command.extend(args)
 
-            ecs_client = boto3.client("ecs", region_name="us-west-2", **self.aws_creds)
+            ecs_client = boto3.client("ecs", region_name="us-east-2", **self.aws_creds)
             resp = ecs_client.run_task(
                 cluster=cluster_name,
                 taskDefinition=task_definition,
@@ -177,10 +170,9 @@ class BidRunner:
                 networkConfiguration={
                     "awsvpcConfiguration": {
                         "subnets": [
-                            "subnet-00dbf1bd023906da2",
-                            "subnet-0f8ae878792f9ba53",
-                            "subnet-0be2ea73766e5a51a",
-                            "subnet-03d9c808462943df1",
+                            "subnet-f58504b8",
+                            "subnet-876f54ee",
+                            "subnet-71b3c80a",
                         ],
                         "assignPublicIp": "ENABLED",
                     }
@@ -188,7 +180,7 @@ class BidRunner:
                 overrides={
                     "containerOverrides": [
                         {
-                            "name": "water-tracker",
+                            "name": "bidrunner",
                             "command": overwrite_command,
                             "environment": [
                                 {"name": k.upper(), "value": v}
@@ -215,17 +207,6 @@ class BidRunner:
                 f"{log_with_timestamp()} An error occured trying to run the task"
             )
             self.logger.write(f"{e}")
-
-    def get_all_running_tasks(self):
-        """
-        Get a list of all the running tasks that are related to water tracker
-        """
-        ecs_cl = boto3.client("ecs", **self.aws_creds, region_name="us-west-2")
-        resp = ecs_cl.list_tasks(
-            cluster="WaterTrackerDevCluster", desiredStatus="RUNNING"
-        )
-        task_list = resp.get("taskArns")
-        return task_list
 
     def check_task_status(self):
         if len(self.runner_details) == 0:
@@ -321,10 +302,6 @@ class BidRunner:
 
         return [(f, f) for f in folders]
 
-    def efs_get_all_folders(self):
-        all_folders = os.listdir("/mnt/efs")
-        return [(f, f) for f in all_folders]
-
     # TODO: maybe remove this? I think we should just instruct users to use the aws cli
     def s3_sync_to_bucket(self, source, destination):
         s3_cl = boto3.client("s3", **self.aws_creds, region_name="us-west-2")
@@ -354,14 +331,28 @@ class BidRunnerApp(App):
         self.runner = BidRunner()
         self.runner.load_config()
         self.selected_folder_to_upload = None
-        s3_input_root = self.runner.config["app"]["s3_input_root"]
-        s3_output_root = self.runner.config["app"]["s3_output_root"]
+        s3_app_parent = self.runner.config.get("app")
+        if s3_app_parent is None:
+            raise Exception(
+                f"""found incomplete config file, insert appropriate values to continue, use the following:\n 
+                Windows: notepad {self.runner.config_path}\n
+                Linux: vim {self.runner.config_path}
+                """
+            )
+        s3_input_root = s3_app_parent.get("s3_input_root")
+        s3_output_root = s3_app_parent.get("s3_output_root")
+
+        if s3_input_root is None or s3_output_root is None:
+            raise Exception(
+                f"""found incomplete config file, insert appropriate values to continue, use the following:\n 
+                Windows: notepad {self.runner.config_path}\n
+                Linux: vim {self.runner.config_path}
+                """
+            )
         try:
             self.runner.aws_set_credentials(
-                self.runner.config["aws"]["aws_access_key_id"]
-                or os.getenv("AWS_ACCESS_KEY_ID"),
-                self.runner.config["aws"]["aws_secret_access_key"]
-                or os.getenv("AWS_SECRET_ACCESS_KEY"),
+                self.runner.config["aws"]["aws_access_key_id"],  # type: ignore
+                self.runner.config["aws"]["aws_secret_access_key"],  # type: ignore
                 None,
             )
             self.account_input_bucket_list = self.runner.s3_get_all_buckets(
@@ -409,11 +400,6 @@ class BidRunnerApp(App):
                             id="bid-input-bucket",
                             classes="input-focus input-element",
                         ),
-                        # Input(
-                        #     placeholder="Auction Id",
-                        #     id="bid-auction-id",
-                        #     classes="input-focus input-element",
-                        # ),
                         Input(
                             placeholder="Auction shapefile",
                             id="bid-auction-shapefile",
