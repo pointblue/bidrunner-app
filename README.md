@@ -6,8 +6,9 @@ An interface for deploying auction evaluations.
 
 To install the **bidrunner2** interface you will need at least python 3.8. 
 
+
 ```bash
-pipx install git+https://github.com/FlowWest/bidrunner2.git --force 
+pipx install git+https://github.com/pointblue/bidrunner-app.git --force 
 ```
 
 This will install an executable that can be spawned by running `bidunner2.exe` from the commmand line.
